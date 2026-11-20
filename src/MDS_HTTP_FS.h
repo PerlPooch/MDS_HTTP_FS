@@ -11,6 +11,15 @@
 // Receive a single file beneath a caller-selected directory on a mounted filesystem.
 class MDS_HTTP_FS final : public MDS_HTTPUpload {
 public:
+	enum class BrowserForm {
+		Disabled,
+		Enabled
+	};
+
+	// Install the multipart POST route and optionally serve its browser form at the same URL.
+	static void install(MDS_HTTP& http, const char* route, fs::FS& filesystem, const char* root,
+		BrowserForm form = BrowserForm::Disabled);
+
 	// Borrow the filesystem and copy the absolute upload root.
 	MDS_HTTP_FS(fs::FS& filesystem, const char* root);
 

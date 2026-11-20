@@ -40,7 +40,135 @@ bool validRelativePath(const String& path) {
 	return true;
 }
 
+// Serve a self-contained form that submits to the URL at which it was opened.
+void sendFileUploadPage(MDS_HTTPServer& server) {
+	static const char page[] PROGMEM = R"HTML(<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upload</title>
+<style>
+	:root {
+		--bg: #000;
+		--text: #fff;
+		--card: #20202080;
+		--border: rgba(43, 14, 161, 0.58);
+		--shadow: 0 12px 30px rgba(0, 0, 0, 0.10);
+		--radius: 8px;
+	}
+	body {
+		margin: 0;
+		color: var(--text);
+		background: var(--bg);
+		font-family: Helvetica, Arial, sans-serif;
+	}
+	.card {
+		box-sizing: border-box;
+		width: calc(100% - 24px);
+		max-width: 610px;
+		margin: 10vh auto;
+		padding: 24px;
+		background: var(--card);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		box-shadow: var(--shadow);
+	}
+	h1 { margin: 0 0 14px; font-size: 18px; font-weight: 600; }
+	label { display: block; margin: 0 0 4px; }
+	#destination-field { margin-top: 12px; }
+	input, button { font: inherit; }
+	input { box-sizing: border-box; max-width: 100%; }
+	input[type=text] {
+		width: 100%;
+		padding: 6px 8px;
+		color: var(--text);
+		background: #141414;
+		border: 1px solid #555;
+		border-radius: var(--radius);
+	}
+	.actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+	button { border-radius: var(--radius); background: #fff; color: #000; cursor: pointer; }
+	button:disabled { opacity: 0.65; cursor: default; }
+	#status { margin: 12px 0 0; }
+	#status:empty { margin: 0; }
+</style>
+</head>
+<body>
+<main class="card">
+<h1>Upload File</h1>
+<form method="post" enctype="multipart/form-data">
+	<input id="file" name="file" type="file" required>
+	<div id="destination-field" hidden>
+		<label for="destination">Destination path</label>
+		<input id="destination" type="text" placeholder="">
+	</div>
+	<div class="actions">
+		<button type="submit">Upload</button>
+	</div>
+</form>
+<p id="status" role="status"></p>
+</main>
+<script>
+const form = document.querySelector('form');
+const file = document.querySelector('#file');
+const destination = document.querySelector('#destination');
+const button = form.querySelector('button');
+const status = document.querySelector('#status');
+
+document.querySelector('#destination-field').hidden = false;
+
+file.addEventListener('change', () => {
+	// Start with the selected filename so users can add a directory or rename it.
+	destination.value = file.files[0]?.name ?? '';
+});
+
+form.addEventListener('submit', async (event) => {
+	// Send the destination as the multipart filename understood by the backend.
+	event.preventDefault();
+	const selected = file.files[0];
+	const filename = destination.value || selected.name;
+	const body = new FormData();
+	body.append('file', selected, filename);
+	
+	button.disabled = true;
+	status.textContent = 'Uploading…';
+	try {
+	    const response = await fetch(form.action, { method: 'POST', body });
+		if (!response.ok) {
+			status.textContent = 'Upload failed. ' + await response.text();
+		} else {
+			status.textContent = 'Uploaded ' + filename + '.';
+		}
+	} catch {
+		status.textContent = 'Could not reach the device. Try again.';
+	} finally {
+		button.disabled = false;
+	}
+});
+</script>
+</body>
+</html>
+)HTML";
+
+	server.send_P(200, PSTR("text/html; charset=utf-8"), page);
+}
+
 } // namespace
+
+// Let callers opt into the browser UI while sharing the same multipart backend.
+void MDS_HTTP_FS::install(MDS_HTTP& http, const char* route, fs::FS& filesystem, const char* root,
+	BrowserForm form) {
+	if (form == BrowserForm::Enabled) {
+		auto& server = http.server();
+		server.on(route, HTTP_GET, [&server]() {
+			// Keep HTML presentation local to the filesystem feature.
+			sendFileUploadPage(server);
+		});
+	}
+
+	http.addUpload(route, std::unique_ptr<MDS_HTTPUpload>(new MDS_HTTP_FS(filesystem, root)));
+}
 
 // An empty file is valid and can replace a previously nonempty asset.
 MDS_HTTP_FS::MDS_HTTP_FS(fs::FS& filesystem, const char* root)
