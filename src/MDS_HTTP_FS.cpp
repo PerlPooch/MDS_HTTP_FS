@@ -497,7 +497,7 @@ void MDS_HTTP_FS::listDirectory(const String& path) {
 			sendCrudError(server, 500);
 		} else if (path == root_) {
 			// An unused upload root is created lazily when the first file is written.
-			server.send(200, "application/json", "[]");
+			server.send(200, "application/json", "[]\n");
 		} else {
 			sendCrudError(server, 404);
 		}
@@ -529,7 +529,7 @@ void MDS_HTTP_FS::listDirectory(const String& path) {
 		}
 		first = false;
 	}
-	server.sendContent("]");
+	server.sendContent("]\n");
 }
 
 // Delete only an existing regular file identified by the request.
