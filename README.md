@@ -1,78 +1,130 @@
 # MDS_HTTP_FS
 
-A filesystem upload backend for `MDS_HTTP` on ESP32 and ESP8266. It takes a mounted
-Arduino `fs::FS` and uses the filesystem's same-volume rename operation to replace
-files. LittleFS supports this operation.
+`MDS_HTTP_FS` adds file management routes to `MDS_HTTP` on ESP32 and ESP8266.
+It uses a caller-mounted Arduino `fs::FS`. Use LittleFS or a filesystem that
+supports replacing a file with a same-volume rename.
 
-## Arduino examples
+## Register routes
 
-- [BrowserUpload](examples/BrowserUpload/BrowserUpload.ino) prints a URL for the
-  upload form. Select a file and optionally enter a relative destination path.
-- [PostOnlyUpload](examples/PostOnlyUpload/PostOnlyUpload.ino) prints a `curl`
-  command. Create a local `hello.txt` and run the command to upload it.
-
-Both sketches write under `/uploads` on LittleFS. Set `WifiSsid` and
-`WifiPassword`, select a board with a filesystem partition, and open the Serial
-Monitor at 115200 baud. For a blank partition, set `FormatOnMountFailure` to
-`true` for the first run. Formatting erases the filesystem if mounting fails.
-
-## Usage
-
-Register a unique route before starting the listener. This requires the version
-of `MDS_HTTP` with `MDS_HTTP::BrowserForm`.
+Choose the HTTP route and the absolute filesystem root separately. Register each
+route once, before `http.begin()` and before any catch-all static handler.
+Keep the filesystem mounted while the routes are in use.
 
 ```cpp
 #include <LittleFS.h>
 #include <MDS_HTTP_FS.h>
 
-// Register the upload endpoint and its optional browser form.
-void registerWebsiteUpload(MDS_HTTP& http) {
+// Register the file API and the optional browser uploader.
+void registerWebsiteFiles(MDS_HTTP& http) {
+	MDS_HTTP_FS::addCrud(http, "/api/files", LittleFS, "/www");
 	MDS_HTTP_FS::addUpload(http, "/upload-file", LittleFS, "/www",
 		MDS_HTTP::BrowserForm::Enabled);
 }
 ```
 
-Open `/upload-file` to select a file. The browser form can set a relative
-destination path for nested files. Omit the last installer argument for a
-POST-only route.
+You can register either route independently. The examples below use `/api/files`
+and `/upload-file` as the application-selected routes.
 
-To upload from a client, send one multipart field named `file`. The multipart filename is relative to the
-upload root. For example, this writes `/www/assets/style.css`, creating missing
-parent directories.
+## File API
+
+| Request | Success | Response |
+| --- | --- | --- |
+| `GET /api/files` | `200` | JSON listing of the root's immediate children |
+| `GET /api/files?dir=assets` | `200` | JSON listing of that directory's immediate children |
+| `GET /api/files?path=assets/style.css` | `200` | File bytes with content type `application/octet-stream` |
+| `POST /api/files?path=assets/style.css` | `201` for creation, `200` for replacement | Plain-text confirmation |
+| `DELETE /api/files?path=assets/style.css` | `204` | Empty response |
+
+Listings are JSON arrays. Each entry has a basename in `name` and a `type` of
+`directory` or `file`. File entries also report `size` in bytes. Ordering follows
+the filesystem. A root that has yet to be created lists as `[]`.
+
+```json
+[
+  {"name": "assets", "type": "directory"},
+  {"name": "index.html", "type": "file", "size": 1485}
+]
+```
+
+Use a URL-encoded, root-relative `path` or `dir`. Omit both to list the root.
+A GET accepts at most one of them. Both POST and DELETE require `path`.
+
+- POST takes one multipart file field named `file`. The query `path` selects the
+  destination. Missing parent directories are created when needed.
+- A successful POST publishes the complete upload by rename. Empty files are
+  valid. Failed or interrupted uploads preserve the previous file.
+- DELETE removes a regular file. Directory deletion and recursive operations
+  are outside the API.
+  Rename operations are outside the API.
+
+| Error | Meaning |
+| --- | --- |
+| `400` | Invalid, empty, or duplicate path parameter, both `dir` and `path` on GET, or an invalid multipart upload |
+| `403` | The application's access check denied the request |
+| `404` | The requested file or directory is missing |
+| `409` | The request expects a file where a directory exists, or a directory where a file exists |
+| `500` | A filesystem operation failed or the configured root is invalid |
+
+Error bodies are plain text. Paths reject leading slashes, empty components,
+`.` and `..` components, backslashes, and control characters. Both
+`.mds-http-upload.tmp` and `.mds-http-crud.tmp` are reserved names.
+
+### Try the API with curl
+
+This sequence creates and deletes a uniquely named test file under the root.
+The second POST demonstrates replacement.
+
+```sh
+BASE=http://BOARD_IP
+PROBE="curl-test-$(date +%s)-$$.txt"
+
+curl -si "$BASE/api/files"
+printf 'first\n' | curl -si -F 'file=@-;filename=probe.txt' "$BASE/api/files?path=$PROBE"
+curl -si "$BASE/api/files?path=$PROBE"
+printf 'second\n' | curl -si -F 'file=@-;filename=probe.txt' "$BASE/api/files?path=$PROBE"
+curl -si -X DELETE "$BASE/api/files?path=$PROBE"
+```
+
+## Standalone upload
+
+`addUpload()` registers a multipart POST. Set `MDS_HTTP::BrowserForm::Enabled` to
+serve the browser form at that URL with GET. The browser lets users enter a
+root-relative destination path. Direct multipart clients set the destination in
+the filename of the `file` part.
 
 ```sh
 curl --fail-with-body -F 'file=@style.css;filename=assets/style.css' http://BOARD_IP/upload-file
 ```
 
-The backend accepts empty files. It rejects absolute filenames, empty path
-components, dot segments, backslashes, and control characters. The root reserves
-`.mds-http-upload.tmp` for staging. Use one uploader per root and keep the filesystem
-mounted for the duration of each request. If a transfer is interrupted, the previous
-file stays in place. A staging file left by a reset is reused on the next upload.
+## Application access checks
 
-## Filesystem API
+`MDS_HTTP_FS::AccessCheck` is a
+`std::function<bool(const MDS_HTTPServer&)>` supplied by the application at
+registration. It runs on file API requests and before the standalone uploader
+stages a file. Returning `false` returns `403`. An omitted check leaves the
+route open. Use the same check for both registrations when both manage the
+same files.
 
-Register the API at an application-selected route before starting the server.
-The route can coexist with a browser uploader using the same filesystem root.
+```cpp
+MDS_HTTP_FS::addCrud(http, "/api/files", LittleFS, "/www", check);
+MDS_HTTP_FS::addUpload(http, "/upload-file", LittleFS, "/www",
+	MDS_HTTP::BrowserForm::Enabled, check);
+```
 
-    MDS_HTTP_FS::addCrud(http, "/api/files", LittleFS, "/www");
+The browser form is public so users can enter a key. When an access check is
+bound, the form includes an optional password field and sends its value in
+`Authorization: Bearer <key>` on POST. The application defines how to validate
+the credential and where to store it.
 
-| Request | Result |
-| --- | --- |
-| GET /api/files | JSON array of immediate children of the configured root |
-| GET /api/files?dir=assets | JSON array of immediate children of that directory |
-| GET /api/files?path=assets/style.css | File bytes as application/octet-stream |
-| POST /api/files?path=assets/style.css | Multipart field named file. Returns 201 for a new file or 200 for a replacement |
-| DELETE /api/files?path=assets/style.css | Removes the file and returns 204 |
+## Arduino examples
 
-Each list entry has a name and type. File entries also include size in bytes.
-Pass URL-encoded, root-relative paths in query parameters. POST uses the query
-path to select the destination and creates missing parent directories. A failed
-or interrupted upload leaves the existing file in place. DELETE operates on
-files. Requests for missing files return 404. Duplicate or invalid paths return
-400. A file or directory type mismatch returns 409.
+- [BrowserUpload](examples/BrowserUpload/BrowserUpload.ino) prints the URL of
+  the upload form.
+- [PostOnlyUpload](examples/PostOnlyUpload/PostOnlyUpload.ino) prints a curl
+  command to upload a local `hello.txt`.
 
-The optional fifth argument is an application access check for all API methods.
-An omitted check leaves the route open. A false result returns 403 and prevents
-filesystem access, including staging a POST. A future browser UI can serve its
-own page and use this API for listing, downloads, uploads, and deletions.
+Both sketches write under `/uploads` on LittleFS. Set `WifiSsid` and
+`WifiPassword`, select a board with a filesystem partition, and open the Serial
+Monitor at 115200 baud. To initialize a blank partition, set
+`FormatOnMountFailure` to `true` for the first run. This erases the filesystem if
+mounting fails.

@@ -80,8 +80,8 @@ void sendEntryName(MDS_HTTPServer& server, const String& name) {
 }
 
 // Serve a self-contained form that submits to the URL at which it was opened.
-void sendFileUploadPage(MDS_HTTPServer& server) {
-	static const char page[] PROGMEM = R"HTML(<!doctype html>
+void sendFileUploadPage(MDS_HTTPServer& server, bool showKey) {
+	static const char pageStart[] PROGMEM = R"HTML(<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -115,10 +115,10 @@ void sendFileUploadPage(MDS_HTTPServer& server) {
 	}
 	h1 { margin: 0 0 14px; font-size: 18px; font-weight: 600; }
 	label { display: block; margin: 0 0 4px; }
-	#destination-field { margin-top: 12px; }
+	#destination-field, #upload-key-field { margin-top: 12px; }
 	input, button { font: inherit; }
 	input { box-sizing: border-box; max-width: 100%; }
-	input[type=text] {
+	input[type=text], input[type=password] {
 		width: 100%;
 		padding: 6px 8px;
 		color: var(--text);
@@ -142,6 +142,14 @@ void sendFileUploadPage(MDS_HTTPServer& server) {
 		<label for="destination">Destination path</label>
 		<input id="destination" type="text" placeholder="">
 	</div>
+)HTML";
+	static const char keyField[] PROGMEM = R"HTML(
+	<div id="upload-key-field" hidden>
+		<label for="upload-key">Access key</label>
+		<input id="upload-key" type="password" autocomplete="off" spellcheck="false">
+	</div>
+)HTML";
+	static const char pageEnd[] PROGMEM = R"HTML(
 	<div class="actions">
 		<button type="submit">Upload</button>
 	</div>
@@ -152,10 +160,12 @@ void sendFileUploadPage(MDS_HTTPServer& server) {
 const form = document.querySelector('form');
 const file = document.querySelector('#file');
 const destination = document.querySelector('#destination');
+const key = document.querySelector('#upload-key');
 const button = form.querySelector('button');
 const status = document.querySelector('#status');
 
 document.querySelector('#destination-field').hidden = false;
+if (key) key.parentElement.hidden = false;
 
 file.addEventListener('change', () => {
 	// Start with the selected filename so users can add a directory or rename it.
@@ -173,7 +183,8 @@ form.addEventListener('submit', async (event) => {
 	button.disabled = true;
 	status.textContent = 'Uploading…';
 	try {
-	    const response = await fetch(form.action, { method: 'POST', body });
+	    const headers = key?.value ? { Authorization: 'Bearer ' + key.value } : {};
+	    const response = await fetch(form.action, { method: 'POST', headers, body });
 		if (!response.ok) {
 			status.textContent = 'Upload failed. ' + await response.text();
 		} else {
@@ -190,23 +201,32 @@ form.addEventListener('submit', async (event) => {
 </html>
 )HTML";
 
-	server.send_P(200, PSTR("text/html; charset=utf-8"), page);
+	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+	server.send_P(200, PSTR("text/html; charset=utf-8"), pageStart);
+	if (showKey) {
+		server.sendContent_P(keyField);
+	}
+	server.sendContent_P(pageEnd);
 }
 
 } // namespace
 
 // Let callers opt into the browser UI while sharing the same multipart backend.
 void MDS_HTTP_FS::addUpload(MDS_HTTP& http, const char* route, fs::FS& filesystem, const char* root,
-	MDS_HTTP::BrowserForm form) {
+	MDS_HTTP::BrowserForm form, AccessCheck access) {
+	auto& server = http.server();
 	if (form == MDS_HTTP::BrowserForm::Enabled) {
-		auto& server = http.server();
-		server.on(route, HTTP_GET, [&server]() {
-			// Keep HTML presentation local to the filesystem feature.
-			sendFileUploadPage(server);
+		const bool showKey = static_cast<bool>(access);
+		server.on(route, HTTP_GET, [&server, showKey]() {
+			// Serve the form before the browser has supplied its access key.
+			sendFileUploadPage(server, showKey);
 		});
 	}
 
-	http.addUpload(route, std::unique_ptr<MDS_HTTPUpload>(new MDS_HTTP_FS(filesystem, root)));
+	auto* files = new MDS_HTTP_FS(filesystem, root);
+	files->server_ = &server;
+	files->access_ = std::move(access);
+	http.addUpload(route, std::unique_ptr<MDS_HTTPUpload>(files));
 }
 
 // Share one filesystem backend across all methods at the application-selected route.
@@ -214,7 +234,8 @@ void MDS_HTTP_FS::addCrud(MDS_HTTP& http, const char* route, fs::FS& filesystem,
 	AccessCheck access) {
 	auto& server = http.server();
 	auto* files = new MDS_HTTP_FS(filesystem, root);
-	files->apiServer_ = &server;
+	files->server_ = &server;
+	files->crud_ = true;
 	files->access_ = std::move(access);
 
 	// addUpload owns the backend for the lifetime of the registered callbacks.
@@ -240,12 +261,12 @@ MDS_HTTP_FS::MDS_HTTP_FS(fs::FS& filesystem, const char* root)
 // Reserve a staging file in the configured root, away from published assets.
 bool MDS_HTTP_FS::begin(const HTTPUpload& upload) {
 	uploadStatus_ = 500;
-	if (apiServer_) {
-		if (!canAccess()) {
-			uploadStatus_ = 403;
-			return false;
-		}
+	if (!canAccess()) {
+		uploadStatus_ = 403;
+		return false;
+	}
 
+	if (crud_) {
 		const int error = resolvePath("path", destination_);
 		if (error) {
 			uploadStatus_ = error;
@@ -257,7 +278,7 @@ bool MDS_HTTP_FS::begin(const HTTPUpload& upload) {
 	}
 
 	String stagingPath;
-	if (!joinPath(root_, apiServer_ ? crudStagingName : stagingName, stagingPath)
+	if (!joinPath(root_, crud_ ? crudStagingName : stagingName, stagingPath)
 		|| !ensureParents(stagingPath)) {
 		return false;
 	}
@@ -288,7 +309,7 @@ bool MDS_HTTP_FS::commit() {
 	stagingFile_.close();
 
 	bool replacing = false;
-	if (apiServer_) {
+	if (crud_) {
 		// The multipart parser can add arguments after the first file starts.
 		String path;
 		const int error = resolvePath("path", path);
@@ -346,7 +367,7 @@ bool MDS_HTTP_FS::ensureParents(const String& path) {
 
 // Apply the application's policy uniformly across all filesystem API methods.
 bool MDS_HTTP_FS::canAccess() const {
-	return !access_ || access_(*apiServer_);
+	return !access_ || access_(*server_);
 }
 
 // Resolve a single decoded path beneath the configured root.
@@ -356,8 +377,8 @@ int MDS_HTTP_FS::resolvePath(const char* parameter, String& path, bool allowRoot
 	}
 
 	int found = -1;
-	for (int index = 0; index < apiServer_->args(); ++index) {
-		if (apiServer_->argName(index) == parameter) {
+	for (int index = 0; index < server_->args(); ++index) {
+		if (server_->argName(index) == parameter) {
 			if (found >= 0) {
 				return 400;
 			}
@@ -372,7 +393,7 @@ int MDS_HTTP_FS::resolvePath(const char* parameter, String& path, bool allowRoot
 		return path.concat(root_) ? 0 : 500;
 	}
 
-	const String relative = apiServer_->arg(found);
+	const String relative = server_->arg(found);
 	if (!validRelativePath(relative)) {
 		return 400;
 	}
@@ -393,20 +414,27 @@ static void sendCrudError(MDS_HTTPServer& server, int status) {
 
 // Let API clients distinguish invalid requests, failed writes, creation and replacement.
 void MDS_HTTP_FS::sendResponse(MDS_HTTPServer& server, MDS_HTTP::Error error, const char* message) {
-	if (!apiServer_) {
+	using Error = MDS_HTTP::Error;
+	const bool incomplete = error == Error::InvalidUpload || error == Error::UploadAborted;
+	if ((error == Error::UploadStartFailed && uploadStatus_ == 403)
+		|| (incomplete && !canAccess())) {
+		server.sendHeader("Cache-Control", "no-store");
+		sendCrudError(server, 403);
+		return;
+	}
+	if (!crud_) {
 		MDS_HTTPUpload::sendResponse(server, error, message);
 		return;
 	}
 
 	server.sendHeader("Cache-Control", "no-store");
-	using Error = MDS_HTTP::Error;
 	switch (error) {
 		case Error::None:
 			server.send(uploadStatus_, "text/plain", message);
 			break;
 		case Error::InvalidUpload:
 		case Error::UploadAborted:
-			sendCrudError(server, canAccess() ? 400 : 403);
+			sendCrudError(server, 400);
 			break;
 		case Error::UploadStartFailed:
 		case Error::UploadFinalizeFailed:
@@ -420,7 +448,7 @@ void MDS_HTTP_FS::sendResponse(MDS_HTTPServer& server, MDS_HTTP::Error error, co
 
 // Stream a requested file or list a directory when no file path was specified.
 void MDS_HTTP_FS::handleGet() {
-	auto& server = *apiServer_;
+	auto& server = *server_;
 	server.sendHeader("Cache-Control", "no-store");
 	if (!canAccess()) {
 		sendCrudError(server, 403);
@@ -462,7 +490,7 @@ void MDS_HTTP_FS::handleGet() {
 
 // Enumerate one level of the filesystem without buffering the entire listing.
 void MDS_HTTP_FS::listDirectory(const String& path) {
-	auto& server = *apiServer_;
+	auto& server = *server_;
 	auto directory = filesystem_.open(path.c_str(), "r");
 	if (!directory) {
 		if (filesystem_.exists(path.c_str())) {
@@ -506,7 +534,7 @@ void MDS_HTTP_FS::listDirectory(const String& path) {
 
 // Delete only an existing regular file identified by the request.
 void MDS_HTTP_FS::handleDelete() {
-	auto& server = *apiServer_;
+	auto& server = *server_;
 	server.sendHeader("Cache-Control", "no-store");
 	if (!canAccess()) {
 		sendCrudError(server, 403);

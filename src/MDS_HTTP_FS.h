@@ -20,7 +20,7 @@ public:
 
 	// Register file POST and optionally a GET form at the same route before http.begin().
 	static void addUpload(MDS_HTTP& http, const char* route, fs::FS& filesystem, const char* root,
-		MDS_HTTP::BrowserForm form = MDS_HTTP::BrowserForm::Disabled);
+		MDS_HTTP::BrowserForm form = MDS_HTTP::BrowserForm::Disabled, AccessCheck access = nullptr);
 
 	// Borrow the filesystem and copy the absolute upload root.
 	MDS_HTTP_FS(fs::FS& filesystem, const char* root);
@@ -61,7 +61,8 @@ private:
 	String stagingPath_;
 	fs::File stagingFile_;
 	size_t written_ = 0;
-	MDS_HTTPServer* apiServer_ = nullptr;
+	MDS_HTTPServer* server_ = nullptr;
+	bool crud_ = false;
 	AccessCheck access_;
 	int uploadStatus_ = 500;
 };
