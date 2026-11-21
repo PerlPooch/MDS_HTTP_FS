@@ -10,9 +10,10 @@
 namespace {
 
 constexpr char stagingName[] = ".mds-http-upload.tmp";
+constexpr char crudStagingName[] = ".mds-http-crud.tmp";
 
 // Check every component before passing a caller-supplied path to the filesystem.
-bool validRelativePath(const String& path) {
+bool validRelativePath(const String& path, bool hideStaging = true) {
 	size_t componentStart = 0;
 
 	for (size_t index = 0; index <= path.length(); ++index) {
@@ -34,10 +35,48 @@ bool validRelativePath(const String& path) {
 			return false;
 		}
 
+		if (hideStaging && (length == sizeof(stagingName) - 1 || length == sizeof(crudStagingName) - 1)) {
+			const String name = path.substring(componentStart, index);
+			if (name.length() != length || name.equalsIgnoreCase(stagingName) || name.equalsIgnoreCase(crudStagingName)) {
+				return false;
+			}
+		}
+
 		componentStart = index + 1;
 	}
 
 	return true;
+}
+
+// Accept a normalized absolute filesystem root.
+bool validRoot(const String& root) {
+	return root.startsWith("/") && (root == "/" || validRelativePath(root.substring(1), false));
+}
+
+// Join a validated relative path to the root and report allocation failure.
+bool joinPath(const String& root, const String& relative, String& result) {
+	result = "";
+	return result.concat(root) && (root == "/" || result.concat('/')) && result.concat(relative);
+}
+
+// Escape JSON delimiters in a validated filename before streaming the entry.
+void sendEntryName(MDS_HTTPServer& server, const String& name) {
+	size_t start = 0;
+	for (size_t index = 0; index < name.length(); ++index) {
+		const char character = name[index];
+		if (character != '"' && character != '\\') {
+			continue;
+		}
+
+		if (index > start) {
+			server.sendContent(name.substring(start, index));
+		}
+		server.sendContent(character == '"' ? "\\\"" : "\\\\");
+		start = index + 1;
+	}
+	if (start < name.length()) {
+		server.sendContent(name.substring(start));
+	}
 }
 
 // Serve a self-contained form that submits to the URL at which it was opened.
@@ -170,6 +209,26 @@ void MDS_HTTP_FS::addUpload(MDS_HTTP& http, const char* route, fs::FS& filesyste
 	http.addUpload(route, std::unique_ptr<MDS_HTTPUpload>(new MDS_HTTP_FS(filesystem, root)));
 }
 
+// Share one filesystem backend across all methods at the application-selected route.
+void MDS_HTTP_FS::addCrud(MDS_HTTP& http, const char* route, fs::FS& filesystem, const char* root,
+	AccessCheck access) {
+	auto& server = http.server();
+	auto* files = new MDS_HTTP_FS(filesystem, root);
+	files->apiServer_ = &server;
+	files->access_ = std::move(access);
+
+	// addUpload owns the backend for the lifetime of the registered callbacks.
+	http.addUpload(route, std::unique_ptr<MDS_HTTPUpload>(files));
+	server.on(route, HTTP_GET, [files]() {
+		// Serve the collection or an individual file at the same route.
+		files->handleGet();
+	});
+	server.on(route, HTTP_DELETE, [files]() {
+		// Apply the same path and access rules to deletions.
+		files->handleDelete();
+	});
+}
+
 // An empty file is valid and can replace a previously nonempty asset.
 MDS_HTTP_FS::MDS_HTTP_FS(fs::FS& filesystem, const char* root)
 	: MDS_HTTPUpload("file", true), filesystem_(filesystem), root_(root) {
@@ -180,28 +239,25 @@ MDS_HTTP_FS::MDS_HTTP_FS(fs::FS& filesystem, const char* root)
 
 // Reserve a staging file in the configured root, away from published assets.
 bool MDS_HTTP_FS::begin(const HTTPUpload& upload) {
-	const String& filename = upload.filename;
-	if (!root_.startsWith("/") || !validRelativePath(filename)
-		|| (root_ != "/" && !validRelativePath(root_.substring(1)))) {
-		return false;
-	}
+	uploadStatus_ = 500;
+	if (apiServer_) {
+		if (!canAccess()) {
+			uploadStatus_ = 403;
+			return false;
+		}
 
-	const int separator = filename.indexOf('/');
-	const size_t firstLength = separator < 0 ? filename.length() : static_cast<size_t>(separator);
-	const String firstComponent = filename.substring(0, firstLength);
-	if (firstComponent.length() != firstLength || firstComponent.equalsIgnoreCase(stagingName)) {
-		return false;
-	}
-
-	destination_ = "";
-	if (!destination_.concat(root_) || (root_ != "/" && !destination_.concat('/'))
-		|| !destination_.concat(filename)) {
+		const int error = resolvePath("path", destination_);
+		if (error) {
+			uploadStatus_ = error;
+			return false;
+		}
+	} else if (!validRoot(root_) || !validRelativePath(upload.filename)
+		|| !joinPath(root_, upload.filename, destination_)) {
 		return false;
 	}
 
 	String stagingPath;
-	if (!stagingPath.concat(root_) || (root_ != "/" && !stagingPath.concat('/'))
-		|| !stagingPath.concat(stagingName)
+	if (!joinPath(root_, apiServer_ ? crudStagingName : stagingName, stagingPath)
 		|| !ensureParents(stagingPath)) {
 		return false;
 	}
@@ -231,6 +287,24 @@ bool MDS_HTTP_FS::write(uint8_t* data, size_t size) {
 bool MDS_HTTP_FS::commit() {
 	stagingFile_.close();
 
+	bool replacing = false;
+	if (apiServer_) {
+		// The multipart parser can add arguments after the first file starts.
+		String path;
+		const int error = resolvePath("path", path);
+		if (error || path != destination_) {
+			uploadStatus_ = error ? error : 400;
+			return false;
+		}
+
+		auto existing = filesystem_.open(destination_.c_str(), "r");
+		if (existing && existing.isDirectory()) {
+			uploadStatus_ = 409;
+			return false;
+		}
+		replacing = existing || filesystem_.exists(destination_.c_str());
+	}
+
 	// File::close() cannot report a buffered write failure on either Arduino core.
 	auto staged = filesystem_.open(stagingPath_.c_str(), "r");
 	const bool complete = staged && !staged.isDirectory() && staged.size() == written_;
@@ -242,6 +316,7 @@ bool MDS_HTTP_FS::commit() {
 	}
 
 	stagingPath_ = "";
+	uploadStatus_ = replacing ? 200 : 201;
 	return true;
 }
 
@@ -267,4 +342,197 @@ bool MDS_HTTP_FS::ensureParents(const String& path) {
 	}
 
 	return true;
+}
+
+// Apply the application's policy uniformly across all filesystem API methods.
+bool MDS_HTTP_FS::canAccess() const {
+	return !access_ || access_(*apiServer_);
+}
+
+// Resolve a single decoded path beneath the configured root.
+int MDS_HTTP_FS::resolvePath(const char* parameter, String& path, bool allowRoot) const {
+	if (!validRoot(root_)) {
+		return 500;
+	}
+
+	int found = -1;
+	for (int index = 0; index < apiServer_->args(); ++index) {
+		if (apiServer_->argName(index) == parameter) {
+			if (found >= 0) {
+				return 400;
+			}
+			found = index;
+		}
+	}
+
+	if (found < 0) {
+		if (!allowRoot) {
+			return 400;
+		}
+		return path.concat(root_) ? 0 : 500;
+	}
+
+	const String relative = apiServer_->arg(found);
+	if (!validRelativePath(relative)) {
+		return 400;
+	}
+	return joinPath(root_, relative, path) ? 0 : 500;
+}
+
+// Return a concise HTTP error without exposing internal filesystem details.
+static void sendCrudError(MDS_HTTPServer& server, int status) {
+	const char* message = "Filesystem operation failed\n";
+	switch (status) {
+		case 400: message = "Invalid filesystem request\n"; break;
+		case 403: message = "Access denied\n"; break;
+		case 404: message = "Path not found\n"; break;
+		case 409: message = "Path has the wrong type\n"; break;
+	}
+	server.send(status, "text/plain", message);
+}
+
+// Let API clients distinguish invalid requests, failed writes, creation and replacement.
+void MDS_HTTP_FS::sendResponse(MDS_HTTPServer& server, MDS_HTTP::Error error, const char* message) {
+	if (!apiServer_) {
+		MDS_HTTPUpload::sendResponse(server, error, message);
+		return;
+	}
+
+	server.sendHeader("Cache-Control", "no-store");
+	using Error = MDS_HTTP::Error;
+	switch (error) {
+		case Error::None:
+			server.send(uploadStatus_, "text/plain", message);
+			break;
+		case Error::InvalidUpload:
+		case Error::UploadAborted:
+			sendCrudError(server, canAccess() ? 400 : 403);
+			break;
+		case Error::UploadStartFailed:
+		case Error::UploadFinalizeFailed:
+			sendCrudError(server, uploadStatus_);
+			break;
+		default:
+			sendCrudError(server, 500);
+			break;
+	}
+}
+
+// Stream a requested file or list a directory when no file path was specified.
+void MDS_HTTP_FS::handleGet() {
+	auto& server = *apiServer_;
+	server.sendHeader("Cache-Control", "no-store");
+	if (!canAccess()) {
+		sendCrudError(server, 403);
+		return;
+	}
+
+	bool download = false;
+	bool directory = false;
+	for (int index = 0; index < server.args(); ++index) {
+		const String name = server.argName(index);
+		download = download || name == "path";
+		directory = directory || name == "dir";
+	}
+	if (download && directory) {
+		sendCrudError(server, 400);
+		return;
+	}
+
+	String path;
+	const int error = resolvePath(download ? "path" : "dir", path, !download);
+	if (error) {
+		sendCrudError(server, error);
+		return;
+	}
+	if (!download) {
+		listDirectory(path);
+		return;
+	}
+
+	auto file = filesystem_.open(path.c_str(), "r");
+	if (!file) {
+		sendCrudError(server, filesystem_.exists(path.c_str()) ? 500 : 404);
+	} else if (file.isDirectory()) {
+		sendCrudError(server, 409);
+	} else {
+		server.streamFile(file, "application/octet-stream");
+	}
+}
+
+// Enumerate one level of the filesystem without buffering the entire listing.
+void MDS_HTTP_FS::listDirectory(const String& path) {
+	auto& server = *apiServer_;
+	auto directory = filesystem_.open(path.c_str(), "r");
+	if (!directory) {
+		if (filesystem_.exists(path.c_str())) {
+			sendCrudError(server, 500);
+		} else if (path == root_) {
+			// An unused upload root is created lazily when the first file is written.
+			server.send(200, "application/json", "[]");
+		} else {
+			sendCrudError(server, 404);
+		}
+		return;
+	}
+	if (!directory.isDirectory()) {
+		sendCrudError(server, 409);
+		return;
+	}
+
+	server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+	server.send(200, "application/json", "");
+	server.sendContent("[");
+	bool first = true;
+	while (auto entry = directory.openNextFile()) {
+		const String name = entry.name();
+		if (!validRelativePath(name)) {
+			continue;
+		}
+
+		server.sendContent(first ? "{\"name\":\"" : ",{\"name\":\"");
+		sendEntryName(server, name);
+		if (entry.isDirectory()) {
+			server.sendContent("\",\"type\":\"directory\"}");
+		} else {
+			server.sendContent("\",\"type\":\"file\",\"size\":");
+			server.sendContent(String(static_cast<unsigned long>(entry.size())));
+			server.sendContent("}");
+		}
+		first = false;
+	}
+	server.sendContent("]");
+}
+
+// Delete only an existing regular file identified by the request.
+void MDS_HTTP_FS::handleDelete() {
+	auto& server = *apiServer_;
+	server.sendHeader("Cache-Control", "no-store");
+	if (!canAccess()) {
+		sendCrudError(server, 403);
+		return;
+	}
+
+	String path;
+	const int error = resolvePath("path", path);
+	if (error) {
+		sendCrudError(server, error);
+		return;
+	}
+	auto file = filesystem_.open(path.c_str(), "r");
+	if (!file) {
+		sendCrudError(server, filesystem_.exists(path.c_str()) ? 500 : 404);
+		return;
+	}
+	if (file.isDirectory()) {
+		sendCrudError(server, 409);
+		return;
+	}
+	file.close();
+
+	if (!filesystem_.remove(path.c_str())) {
+		sendCrudError(server, 500);
+		return;
+	}
+	server.send(204, "text/plain", "");
 }

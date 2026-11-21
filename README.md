@@ -49,3 +49,30 @@ components, dot segments, backslashes, and control characters. The root reserves
 `.mds-http-upload.tmp` for staging. Use one uploader per root and keep the filesystem
 mounted for the duration of each request. If a transfer is interrupted, the previous
 file stays in place. A staging file left by a reset is reused on the next upload.
+
+## Filesystem API
+
+Register the API at an application-selected route before starting the server.
+The route can coexist with a browser uploader using the same filesystem root.
+
+    MDS_HTTP_FS::addCrud(http, "/api/files", LittleFS, "/www");
+
+| Request | Result |
+| --- | --- |
+| GET /api/files | JSON array of immediate children of the configured root |
+| GET /api/files?dir=assets | JSON array of immediate children of that directory |
+| GET /api/files?path=assets/style.css | File bytes as application/octet-stream |
+| POST /api/files?path=assets/style.css | Multipart field named file. Returns 201 for a new file or 200 for a replacement |
+| DELETE /api/files?path=assets/style.css | Removes the file and returns 204 |
+
+Each list entry has a name and type. File entries also include size in bytes.
+Pass URL-encoded, root-relative paths in query parameters. POST uses the query
+path to select the destination and creates missing parent directories. A failed
+or interrupted upload leaves the existing file in place. DELETE operates on
+files. Requests for missing files return 404. Duplicate or invalid paths return
+400. A file or directory type mismatch returns 409.
+
+The optional fifth argument is an application access check for all API methods.
+An omitted check leaves the route open. A false result returns 403 and prevents
+filesystem access, including staging a POST. A future browser UI can serve its
+own page and use this API for listing, downloads, uploads, and deletions.
