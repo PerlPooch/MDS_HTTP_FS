@@ -19,7 +19,7 @@ Monitor at 115200 baud. For a blank partition, set `FormatOnMountFailure` to
 ## Usage
 
 Register a unique route before starting the listener. This requires the version
-of `MDS_HTTP` with `addUpload()`.
+of `MDS_HTTP` with `MDS_HTTP::BrowserForm`.
 
 ```cpp
 #include <LittleFS.h>
@@ -27,8 +27,8 @@ of `MDS_HTTP` with `addUpload()`.
 
 // Register the upload endpoint and its optional browser form.
 void registerWebsiteUpload(MDS_HTTP& http) {
-	MDS_HTTP_FS::install(http, "/upload-file", LittleFS, "/www",
-		MDS_HTTP_FS::BrowserForm::Enabled);
+	MDS_HTTP_FS::addUpload(http, "/upload-file", LittleFS, "/www",
+		MDS_HTTP::BrowserForm::Enabled);
 }
 ```
 

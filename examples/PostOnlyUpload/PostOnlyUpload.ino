@@ -40,7 +40,7 @@ void setup() {
 		return;
 	}
 
-	MDS_HTTP_FS::install(http, UploadRoute, LittleFS, UploadRoot);
+	MDS_HTTP_FS::addUpload(http, UploadRoute, LittleFS, UploadRoot);
 
 	http.setNetworkReadyCallback([]() {
 		// Let the listener follow the station connection.

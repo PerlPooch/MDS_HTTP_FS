@@ -157,9 +157,9 @@ form.addEventListener('submit', async (event) => {
 } // namespace
 
 // Let callers opt into the browser UI while sharing the same multipart backend.
-void MDS_HTTP_FS::install(MDS_HTTP& http, const char* route, fs::FS& filesystem, const char* root,
-	BrowserForm form) {
-	if (form == BrowserForm::Enabled) {
+void MDS_HTTP_FS::addUpload(MDS_HTTP& http, const char* route, fs::FS& filesystem, const char* root,
+	MDS_HTTP::BrowserForm form) {
+	if (form == MDS_HTTP::BrowserForm::Enabled) {
 		auto& server = http.server();
 		server.on(route, HTTP_GET, [&server]() {
 			// Keep HTML presentation local to the filesystem feature.
