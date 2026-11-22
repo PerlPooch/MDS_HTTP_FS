@@ -14,9 +14,12 @@ public:
 	// Return false to deny the request. The application supplies its access policy.
 	using AccessCheck = std::function<bool(const MDS_HTTPServer&)>;
 
+	// Report the mounted volume's total and used bytes, or return false if unavailable.
+	using SpaceInfoProvider = std::function<bool(size_t& totalBytes, size_t& usedBytes)>;
+
 	// Register list, download, upload, rename and delete at a single route before http.begin().
 	static void addCrud(MDS_HTTP& http, const char* route, fs::FS& filesystem, const char* root,
-		AccessCheck access = nullptr, const char* corsOrigin = nullptr);
+		AccessCheck access = nullptr, const char* corsOrigin = nullptr, SpaceInfoProvider spaceInfo = nullptr);
 
 	// Register file POST and optionally a GET form at the same route before http.begin().
 	static void addUpload(MDS_HTTP& http, const char* route, fs::FS& filesystem, const char* root,
@@ -41,11 +44,15 @@ private:
 	// Return the route-specific upload result without changing the browser upload contract.
 	void sendResponse(MDS_HTTPServer& server, MDS_HTTP::Error error, const char* message) override;
 
+	// Register OPTIONS for a route when cross-origin access is configured.
+	void addCorsPreflight(const char* route, const char* methods);
 	// Add the configured origin to a CRUD response.
 	void sendCorsHeader(MDS_HTTPServer& server) const;
 
 	// List a directory or stream a file based on the request parameters.
 	void handleGet();
+	// Read and return the capacity of the entire filesystem backing this route.
+	void handleSpace(const SpaceInfoProvider& spaceInfo);
 	// Remove one regular file or empty directory within the configured root.
 	void handleDelete();
 	// Rename one file or directory without replacing another entry.

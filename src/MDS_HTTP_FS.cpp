@@ -9,6 +9,7 @@
 #include <sdkconfig.h>
 #endif
 
+#include <cstdio>
 #include <cstring>
 #include <utility>
 
@@ -262,7 +263,7 @@ void MDS_HTTP_FS::addUpload(MDS_HTTP& http, const char* route, fs::FS& filesyste
 
 // Share one filesystem backend across all methods at the application-selected route.
 void MDS_HTTP_FS::addCrud(MDS_HTTP& http, const char* route, fs::FS& filesystem, const char* root,
-	AccessCheck access, const char* corsOrigin) {
+	AccessCheck access, const char* corsOrigin, SpaceInfoProvider spaceInfo) {
 	auto& server = http.server();
 	auto* files = new MDS_HTTP_FS(filesystem, root);
 	files->server_ = &server;
@@ -287,15 +288,18 @@ void MDS_HTTP_FS::addCrud(MDS_HTTP& http, const char* route, fs::FS& filesystem,
 		files->handleDelete();
 	});
 
-	if (files->corsOrigin_.length()) {
-		server.on(route, HTTP_OPTIONS, [files]() {
-			// Answer the browser's preflight before it can send its bearer token.
-			auto& server = *files->server_;
-			files->sendCorsHeader(server);
-			server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE");
-			server.sendHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
-			server.send(204, "text/plain", "");
-		});
+	files->addCorsPreflight(route, "GET, POST, PATCH, DELETE");
+
+	if (spaceInfo) {
+		String spaceRoute(route);
+		if (spaceRoute.length() == std::strlen(route)
+			&& spaceRoute.concat(spaceRoute.endsWith("/") ? "space" : "/space")) {
+			server.on(spaceRoute.c_str(), HTTP_GET, [files, spaceInfo]() {
+				// Read live space only after the file API authorizes the request.
+				files->handleSpace(spaceInfo);
+			});
+			files->addCorsPreflight(spaceRoute.c_str(), "GET");
+		}
 	}
 }
 
@@ -455,6 +459,22 @@ static void sendCrudError(MDS_HTTPServer& server, int status) {
 	server.send(status, "text/plain", message);
 }
 
+// Answer preflight before the browser can send its bearer token.
+void MDS_HTTP_FS::addCorsPreflight(const char* route, const char* methods) {
+	if (!corsOrigin_.length()) {
+		return;
+	}
+
+	server_->on(route, HTTP_OPTIONS, [this, methods]() {
+		// Advertise only the methods supported by this route.
+		auto& server = *server_;
+		sendCorsHeader(server);
+		server.sendHeader("Access-Control-Allow-Methods", methods);
+		server.sendHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+		server.send(204, "text/plain", "");
+	});
+}
+
 // Use the registration-time origin for both preflight and actual responses.
 void MDS_HTTP_FS::sendCorsHeader(MDS_HTTPServer& server) const {
 	if (corsOrigin_.length()) {
@@ -496,6 +516,29 @@ void MDS_HTTP_FS::sendResponse(MDS_HTTPServer& server, MDS_HTTP::Error error, co
 			sendCrudError(server, 500);
 			break;
 	}
+}
+
+// Return a small, uncached snapshot from the application-supplied space provider.
+void MDS_HTTP_FS::handleSpace(const SpaceInfoProvider& spaceInfo) {
+	auto& server = *server_;
+	sendCorsHeader(server);
+	server.sendHeader("Cache-Control", "no-store");
+	if (!canAccess()) {
+		sendCrudError(server, 403);
+		return;
+	}
+
+	size_t totalBytes = 0;
+	size_t usedBytes = 0;
+	if (!spaceInfo(totalBytes, usedBytes) || !totalBytes || usedBytes > totalBytes) {
+		server.send(503, "text/plain", "Filesystem space is unavailable\n");
+		return;
+	}
+
+	char response[80];
+	std::snprintf(response, sizeof(response), "{\"totalBytes\":%lu,\"usedBytes\":%lu}\n",
+		static_cast<unsigned long>(totalBytes), static_cast<unsigned long>(usedBytes));
+	server.send(200, "application/json", response);
 }
 
 // Stream a requested file or list a directory when no file path was specified.

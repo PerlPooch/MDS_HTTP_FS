@@ -43,10 +43,17 @@ still applies to the file operations.
 | --- | --- | --- |
 | `GET /api/files` | `200` | JSON listing of the root's immediate children |
 | `GET /api/files?dir=assets` | `200` | JSON listing of that directory's immediate children |
+| `GET /api/files/space` | `200` | JSON with the mounted volume's `totalBytes` and `usedBytes` when configured |
 | `GET /api/files?path=assets/style.css` | `200` | File bytes with content type `application/octet-stream` |
 | `POST /api/files?path=assets/style.css` | `201` for creation, `200` for replacement | Plain-text confirmation |
 | `PATCH /api/files?path=assets/style.css&name=main.css` | `204` | Empty response |
 | `DELETE /api/files?path=assets/style.css` | `204` | Empty response after deleting a file or empty directory |
+
+Pass a `SpaceInfoProvider` as the last argument to `addCrud()` to register
+the `/space` subroute. The callback fills the total and used byte counts for
+the filesystem containing the configured root. A failed callback or invalid
+counts returns `503`. The space route uses the file API's access check and CORS
+configuration.
 
 Listings are JSON arrays. Each entry has a basename in `name` and a `type` of
 `directory` or `file`. File entries also report `size` in bytes. Ordering follows
