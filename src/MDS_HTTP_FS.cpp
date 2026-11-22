@@ -5,12 +5,43 @@
 
 #include "MDS_HTTP_FS.h"
 
+#if defined(ARDUINO_ARCH_ESP32)
+#include <sdkconfig.h>
+#endif
+
+#include <cstring>
 #include <utility>
 
 namespace {
 
 constexpr char stagingName[] = ".mds-http-upload.tmp";
 constexpr char crudStagingName[] = ".mds-http-crud.tmp";
+constexpr int missingArgument = -1;
+constexpr int duplicateArgument = -2;
+
+// LittleFS limits count bytes and reserve space for the terminating NUL.
+#if defined(CONFIG_LITTLEFS_OBJ_NAME_LEN)
+constexpr size_t maxRenameNameBytes = CONFIG_LITTLEFS_OBJ_NAME_LEN - 1;
+#elif defined(ARDUINO_ARCH_ESP8266)
+constexpr size_t maxRenameNameBytes = 31;
+#else
+constexpr size_t maxRenameNameBytes = 63;
+#endif
+
+// Locate a unique decoded request argument without silently accepting duplicates.
+int uniqueArgumentIndex(const MDS_HTTPServer& server, const char* name) {
+	int found = missingArgument;
+	for (int index = 0; index < server.args(); ++index) {
+		if (server.argName(index) == name) {
+			if (found != missingArgument) {
+				return duplicateArgument;
+			}
+			found = index;
+		}
+	}
+
+	return found;
+}
 
 // Check every component before passing a caller-supplied path to the filesystem.
 bool validRelativePath(const String& path, bool hideStaging = true) {
@@ -247,6 +278,10 @@ void MDS_HTTP_FS::addCrud(MDS_HTTP& http, const char* route, fs::FS& filesystem,
 		// Serve the collection or an individual file at the same route.
 		files->handleGet();
 	});
+	server.on(route, HTTP_PATCH, [files]() {
+		// Apply the same filesystem scope and access check to renames.
+		files->handleRename();
+	});
 	server.on(route, HTTP_DELETE, [files]() {
 		// Apply the same path and access rules to deletions.
 		files->handleDelete();
@@ -257,7 +292,7 @@ void MDS_HTTP_FS::addCrud(MDS_HTTP& http, const char* route, fs::FS& filesystem,
 			// Answer the browser's preflight before it can send its bearer token.
 			auto& server = *files->server_;
 			files->sendCorsHeader(server);
-			server.sendHeader("Access-Control-Allow-Methods", "GET, POST, DELETE");
+			server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE");
 			server.sendHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
 			server.send(204, "text/plain", "");
 		});
@@ -390,17 +425,11 @@ int MDS_HTTP_FS::resolvePath(const char* parameter, String& path, bool allowRoot
 		return 500;
 	}
 
-	int found = -1;
-	for (int index = 0; index < server_->args(); ++index) {
-		if (server_->argName(index) == parameter) {
-			if (found >= 0) {
-				return 400;
-			}
-			found = index;
-		}
+	const int found = uniqueArgumentIndex(*server_, parameter);
+	if (found == duplicateArgument) {
+		return 400;
 	}
-
-	if (found < 0) {
+	if (found == missingArgument) {
 		if (!allowRoot) {
 			return 400;
 		}
@@ -556,7 +585,64 @@ void MDS_HTTP_FS::listDirectory(const String& path) {
 	server.sendContent("]\n");
 }
 
-// Delete only an existing regular file identified by the request.
+// Rename an existing entry within its parent directory with one filesystem operation.
+void MDS_HTTP_FS::handleRename() {
+	auto& server = *server_;
+	sendCorsHeader(server);
+	server.sendHeader("Cache-Control", "no-store");
+	if (!canAccess()) {
+		sendCrudError(server, 403);
+		return;
+	}
+
+	String source;
+	const int pathError = resolvePath("path", source);
+	if (pathError) {
+		sendCrudError(server, pathError);
+		return;
+	}
+
+	const int nameIndex = uniqueArgumentIndex(server, "name");
+	if (nameIndex < 0) {
+		server.send(400, "text/plain", "Exactly one new name is required\n");
+		return;
+	}
+	const String name = server.arg(nameIndex);
+	if (name.length() > maxRenameNameBytes) {
+		server.send(400, "text/plain", "New name exceeds the filesystem name limit\n");
+		return;
+	}
+	if (name.indexOf('/') >= 0 || !validRelativePath(name)) {
+		server.send(400, "text/plain", "Invalid new name\n");
+		return;
+	}
+
+	const auto parentLength = static_cast<size_t>(std::strrchr(source.c_str(), '/') - source.c_str() + 1);
+	String destination = source.substring(0, parentLength);
+	if (destination.length() != parentLength || !destination.concat(name)) {
+		sendCrudError(server, 500);
+		return;
+	}
+
+	if (!filesystem_.exists(source.c_str())) {
+		sendCrudError(server, 404);
+		return;
+	}
+	if (source != destination) {
+		if (filesystem_.exists(destination.c_str())) {
+			server.send(409, "text/plain", "An item with that name already exists\n");
+			return;
+		}
+		if (!filesystem_.rename(source.c_str(), destination.c_str())) {
+			sendCrudError(server, 500);
+			return;
+		}
+	}
+
+	server.send(204, "text/plain", "");
+}
+
+// Delete a regular file or empty directory identified by the request.
 void MDS_HTTP_FS::handleDelete() {
 	auto& server = *server_;
 	sendCorsHeader(server);
@@ -577,13 +663,23 @@ void MDS_HTTP_FS::handleDelete() {
 		sendCrudError(server, filesystem_.exists(path.c_str()) ? 500 : 404);
 		return;
 	}
-	if (file.isDirectory()) {
-		sendCrudError(server, 409);
-		return;
+	const bool directory = file.isDirectory();
+	if (directory) {
+		while (auto child = file.openNextFile()) {
+			const String name = child.name();
+			child.close();
+			if (name != "." && name != "..") {
+				file.close();
+				server.send(409, "text/plain", "Folder is not empty\n");
+				return;
+			}
+		}
 	}
 	file.close();
 
-	if (!filesystem_.remove(path.c_str())) {
+	// rmdir also refuses a directory that gains a child after the check above.
+	const bool removed = directory ? filesystem_.rmdir(path.c_str()) : filesystem_.remove(path.c_str());
+	if (!removed) {
 		sendCrudError(server, 500);
 		return;
 	}

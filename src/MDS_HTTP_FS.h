@@ -14,7 +14,7 @@ public:
 	// Return false to deny the request. The application supplies its access policy.
 	using AccessCheck = std::function<bool(const MDS_HTTPServer&)>;
 
-	// Register list, download, upload and delete at a single route before http.begin().
+	// Register list, download, upload, rename and delete at a single route before http.begin().
 	static void addCrud(MDS_HTTP& http, const char* route, fs::FS& filesystem, const char* root,
 		AccessCheck access = nullptr, const char* corsOrigin = nullptr);
 
@@ -46,8 +46,10 @@ private:
 
 	// List a directory or stream a file based on the request parameters.
 	void handleGet();
-	// Remove one regular file within the configured root.
+	// Remove one regular file or empty directory within the configured root.
 	void handleDelete();
+	// Rename one file or directory without replacing another entry.
+	void handleRename();
 	// Stream a JSON array containing the immediate children of a directory.
 	void listDirectory(const String& path);
 	// Check the application policy before any filesystem operation.

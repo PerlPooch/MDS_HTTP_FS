@@ -35,7 +35,7 @@ MDS_HTTP_FS::addCrud(http, "/api/files", LittleFS, "/www", nullptr, "*");
 ```
 
 Omit the origin or pass an empty string to leave CORS disabled. A configured
-origin enables browser preflight for GET, POST and DELETE, including requests
+origin enables browser preflight for GET, POST, PATCH and DELETE, including requests
 with an `Authorization` header. Any access check supplied to `addCrud()`
 still applies to the file operations.
 
@@ -45,7 +45,8 @@ still applies to the file operations.
 | `GET /api/files?dir=assets` | `200` | JSON listing of that directory's immediate children |
 | `GET /api/files?path=assets/style.css` | `200` | File bytes with content type `application/octet-stream` |
 | `POST /api/files?path=assets/style.css` | `201` for creation, `200` for replacement | Plain-text confirmation |
-| `DELETE /api/files?path=assets/style.css` | `204` | Empty response |
+| `PATCH /api/files?path=assets/style.css&name=main.css` | `204` | Empty response |
+| `DELETE /api/files?path=assets/style.css` | `204` | Empty response after deleting a file or empty directory |
 
 Listings are JSON arrays. Each entry has a basename in `name` and a `type` of
 `directory` or `file`. File entries also report `size` in bytes. Ordering follows
@@ -59,22 +60,27 @@ the filesystem. A root that has yet to be created lists as `[]`.
 ```
 
 Use a URL-encoded, root-relative `path` or `dir`. Omit both to list the root.
-A GET accepts at most one of them. Both POST and DELETE require `path`.
+A GET accepts at most one of them. POST, PATCH and DELETE require `path`.
 
 - POST takes one multipart file field named `file`. The query `path` selects the
   destination. Missing parent directories are created when needed.
 - A successful POST publishes the complete upload by rename. Empty files are
   valid. Failed or interrupted uploads preserve the previous file.
-- DELETE removes a regular file. Directory deletion and recursive operations
-  are outside the API.
-  Rename operations are outside the API.
+- DELETE removes a regular file or empty directory. A non-empty directory
+  returns `409` with its contents intact.
+- PATCH renames one file or directory within its current parent. Supply exactly
+  one URL-encoded `name` containing the new basename. An unchanged name succeeds.
+  An occupied destination returns `409` and preserves both entries.
+  The new name follows the path-component rules below and allows up to 31 bytes
+  on ESP8266 or 63 bytes by default on ESP32. An ESP32 build with a different
+  `CONFIG_LITTLEFS_OBJ_NAME_LEN` uses that value minus the terminating byte.
 
 | Error | Meaning |
 | --- | --- |
-| `400` | Invalid, empty, or duplicate path parameter, both `dir` and `path` on GET, or an invalid multipart upload |
+| `400` | Invalid, empty, or duplicate path parameter, both `dir` and `path` on GET, an invalid new name, or an invalid multipart upload |
 | `403` | The application's access check denied the request |
 | `404` | The requested file or directory is missing |
-| `409` | The request expects a file where a directory exists, or a directory where a file exists |
+| `409` | The request expects a file where a directory exists, a directory where a file exists, the rename destination is occupied, or the directory to delete is non-empty |
 | `500` | A filesystem operation failed or the configured root is invalid |
 
 Error bodies are plain text. Paths reject leading slashes, empty components,
