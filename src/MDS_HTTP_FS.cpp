@@ -628,7 +628,7 @@ void MDS_HTTP_FS::listDirectory(const String& path) {
 	server.sendContent("]\n");
 }
 
-// Rename an existing entry within its parent directory with one filesystem operation.
+// Rename or move an existing entry with one filesystem operation.
 void MDS_HTTP_FS::handleRename() {
 	auto& server = *server_;
 	sendCorsHeader(server);
@@ -646,24 +646,37 @@ void MDS_HTTP_FS::handleRename() {
 	}
 
 	const int nameIndex = uniqueArgumentIndex(server, "name");
-	if (nameIndex < 0) {
-		server.send(400, "text/plain", "Exactly one new name is required\n");
-		return;
-	}
-	const String name = server.arg(nameIndex);
-	if (name.length() > maxRenameNameBytes) {
-		server.send(400, "text/plain", "New name exceeds the filesystem name limit\n");
-		return;
-	}
-	if (name.indexOf('/') >= 0 || !validRelativePath(name)) {
-		server.send(400, "text/plain", "Invalid new name\n");
+	const int toIndex = uniqueArgumentIndex(server, "to");
+	if (nameIndex == duplicateArgument || toIndex == duplicateArgument
+		|| (nameIndex >= 0) == (toIndex >= 0)) {
+		server.send(400, "text/plain", "Supply exactly one name or destination path\n");
 		return;
 	}
 
-	const auto parentLength = static_cast<size_t>(std::strrchr(source.c_str(), '/') - source.c_str() + 1);
-	String destination = source.substring(0, parentLength);
-	if (destination.length() != parentLength || !destination.concat(name)) {
-		sendCrudError(server, 500);
+	String destination;
+	if (toIndex >= 0) {
+		const int destinationError = resolvePath("to", destination);
+		if (destinationError) {
+			sendCrudError(server, destinationError);
+			return;
+		}
+	} else {
+		const String name = server.arg(nameIndex);
+		if (name.indexOf('/') >= 0 || !validRelativePath(name)) {
+			server.send(400, "text/plain", "Invalid new name\n");
+			return;
+		}
+		const auto parentLength = static_cast<size_t>(std::strrchr(source.c_str(), '/') - source.c_str() + 1);
+		destination = source.substring(0, parentLength);
+		if (destination.length() != parentLength || !destination.concat(name)) {
+			sendCrudError(server, 500);
+			return;
+		}
+	}
+
+	const char* separator = std::strrchr(destination.c_str(), '/');
+	if (std::strlen(separator + 1) > maxRenameNameBytes) {
+		server.send(400, "text/plain", "New name exceeds the filesystem name limit\n");
 		return;
 	}
 
@@ -672,6 +685,33 @@ void MDS_HTTP_FS::handleRename() {
 		return;
 	}
 	if (source != destination) {
+		if (destination.startsWith(source.c_str()) && destination[source.length()] == '/') {
+			server.send(409, "text/plain", "An item cannot be moved inside itself\n");
+			return;
+		}
+		if (toIndex >= 0) {
+			const auto parentEnd = static_cast<size_t>(separator - destination.c_str());
+			const size_t parentLength = parentEnd ? parentEnd : 1;
+			const String parentPath = destination.substring(0, parentLength);
+			if (parentPath.length() != parentLength) {
+				sendCrudError(server, 500);
+				return;
+			}
+			auto parent = filesystem_.open(parentPath.c_str(), "r");
+			if (!parent) {
+				if (filesystem_.exists(parentPath.c_str())) {
+					sendCrudError(server, 500);
+				} else {
+					server.send(404, "text/plain", "Destination folder does not exist\n");
+				}
+				return;
+			}
+			if (!parent.isDirectory()) {
+				server.send(409, "text/plain", "Destination parent is not a folder\n");
+				return;
+			}
+			parent.close();
+		}
 		if (filesystem_.exists(destination.c_str())) {
 			server.send(409, "text/plain", "An item with that name already exists\n");
 			return;

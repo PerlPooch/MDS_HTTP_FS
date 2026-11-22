@@ -46,7 +46,8 @@ still applies to the file operations.
 | `GET /api/files/space` | `200` | JSON with the mounted volume's `totalBytes` and `usedBytes` when configured |
 | `GET /api/files?path=assets/style.css` | `200` | File bytes with content type `application/octet-stream` |
 | `POST /api/files?path=assets/style.css` | `201` for creation, `200` for replacement | Plain-text confirmation |
-| `PATCH /api/files?path=assets/style.css&name=main.css` | `204` | Empty response |
+| `PATCH /api/files?path=assets/style.css&name=main.css` | `204` | Empty response after renaming |
+| `PATCH /api/files?path=assets/style.css&to=styles/style.css` | `204` | Empty response after moving |
 | `DELETE /api/files?path=assets/style.css` | `204` | Empty response after deleting a file or empty directory |
 
 Pass a `SpaceInfoProvider` as the last argument to `addCrud()` to register
@@ -75,10 +76,13 @@ A GET accepts at most one of them. POST, PATCH and DELETE require `path`.
   valid. Failed or interrupted uploads preserve the previous file.
 - DELETE removes a regular file or empty directory. A non-empty directory
   returns `409` with its contents intact.
-- PATCH renames one file or directory within its current parent. Supply exactly
-  one URL-encoded `name` containing the new basename. An unchanged name succeeds.
-  An occupied destination returns `409` and preserves both entries.
-  The new name follows the path-component rules below and allows up to 31 bytes
+- PATCH takes exactly one `name` or `to` argument in addition to `path`. Give
+  `name` a new basename to rename within the parent, or give `to` the full
+  root-relative destination path to move an entry. The destination parent must
+  already exist. An occupied destination or a move into the source's own
+  subtree returns `409` and preserves the existing entries. An unchanged path
+  succeeds.
+  The destination basename follows the rules below and allows up to 31 bytes
   on ESP8266 or 63 bytes by default on ESP32. An ESP32 build with a different
   `CONFIG_LITTLEFS_OBJ_NAME_LEN` uses that value minus the terminating byte.
 

@@ -55,7 +55,7 @@ private:
 	void handleSpace(const SpaceInfoProvider& spaceInfo);
 	// Remove one regular file or empty directory within the configured root.
 	void handleDelete();
-	// Rename one file or directory without replacing another entry.
+	// Rename or move one file or directory without replacing another entry.
 	void handleRename();
 	// Stream a JSON array containing the immediate children of a directory.
 	void listDirectory(const String& path);
