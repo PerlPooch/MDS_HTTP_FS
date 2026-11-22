@@ -27,6 +27,18 @@ and `/upload-file` as the application-selected routes.
 
 ## File API
 
+For a browser app served from a different origin, pass the allowed origin as
+the last argument to `addCrud()`. Pass `"*"` to allow any origin.
+
+```cpp
+MDS_HTTP_FS::addCrud(http, "/api/files", LittleFS, "/www", nullptr, "*");
+```
+
+Omit the origin or pass an empty string to leave CORS disabled. A configured
+origin enables browser preflight for GET, POST and DELETE, including requests
+with an `Authorization` header. Any access check supplied to `addCrud()`
+still applies to the file operations.
+
 | Request | Success | Response |
 | --- | --- | --- |
 | `GET /api/files` | `200` | JSON listing of the root's immediate children |
