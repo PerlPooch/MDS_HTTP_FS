@@ -231,12 +231,15 @@ void MDS_HTTP_FS::addUpload(MDS_HTTP& http, const char* route, fs::FS& filesyste
 
 // Share one filesystem backend across all methods at the application-selected route.
 void MDS_HTTP_FS::addCrud(MDS_HTTP& http, const char* route, fs::FS& filesystem, const char* root,
-	AccessCheck access) {
+	AccessCheck access, const char* corsOrigin) {
 	auto& server = http.server();
 	auto* files = new MDS_HTTP_FS(filesystem, root);
 	files->server_ = &server;
 	files->crud_ = true;
 	files->access_ = std::move(access);
+	if (corsOrigin) {
+		files->corsOrigin_ = corsOrigin;
+	}
 
 	// addUpload owns the backend for the lifetime of the registered callbacks.
 	http.addUpload(route, std::unique_ptr<MDS_HTTPUpload>(files));
@@ -248,6 +251,17 @@ void MDS_HTTP_FS::addCrud(MDS_HTTP& http, const char* route, fs::FS& filesystem,
 		// Apply the same path and access rules to deletions.
 		files->handleDelete();
 	});
+
+	if (files->corsOrigin_.length()) {
+		server.on(route, HTTP_OPTIONS, [files]() {
+			// Answer the browser's preflight before it can send its bearer token.
+			auto& server = *files->server_;
+			files->sendCorsHeader(server);
+			server.sendHeader("Access-Control-Allow-Methods", "GET, POST, DELETE");
+			server.sendHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+			server.send(204, "text/plain", "");
+		});
+	}
 }
 
 // An empty file is valid and can replace a previously nonempty asset.
@@ -412,8 +426,17 @@ static void sendCrudError(MDS_HTTPServer& server, int status) {
 	server.send(status, "text/plain", message);
 }
 
+// Use the registration-time origin for both preflight and actual responses.
+void MDS_HTTP_FS::sendCorsHeader(MDS_HTTPServer& server) const {
+	if (corsOrigin_.length()) {
+		server.sendHeader("Access-Control-Allow-Origin", corsOrigin_.c_str());
+	}
+}
+
 // Let API clients distinguish invalid requests, failed writes, creation and replacement.
 void MDS_HTTP_FS::sendResponse(MDS_HTTPServer& server, MDS_HTTP::Error error, const char* message) {
+	sendCorsHeader(server);
+
 	using Error = MDS_HTTP::Error;
 	const bool incomplete = error == Error::InvalidUpload || error == Error::UploadAborted;
 	if ((error == Error::UploadStartFailed && uploadStatus_ == 403)
@@ -449,6 +472,7 @@ void MDS_HTTP_FS::sendResponse(MDS_HTTPServer& server, MDS_HTTP::Error error, co
 // Stream a requested file or list a directory when no file path was specified.
 void MDS_HTTP_FS::handleGet() {
 	auto& server = *server_;
+	sendCorsHeader(server);
 	server.sendHeader("Cache-Control", "no-store");
 	if (!canAccess()) {
 		sendCrudError(server, 403);
@@ -535,6 +559,7 @@ void MDS_HTTP_FS::listDirectory(const String& path) {
 // Delete only an existing regular file identified by the request.
 void MDS_HTTP_FS::handleDelete() {
 	auto& server = *server_;
+	sendCorsHeader(server);
 	server.sendHeader("Cache-Control", "no-store");
 	if (!canAccess()) {
 		sendCrudError(server, 403);

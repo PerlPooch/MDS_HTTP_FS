@@ -16,7 +16,7 @@ public:
 
 	// Register list, download, upload and delete at a single route before http.begin().
 	static void addCrud(MDS_HTTP& http, const char* route, fs::FS& filesystem, const char* root,
-		AccessCheck access = nullptr);
+		AccessCheck access = nullptr, const char* corsOrigin = nullptr);
 
 	// Register file POST and optionally a GET form at the same route before http.begin().
 	static void addUpload(MDS_HTTP& http, const char* route, fs::FS& filesystem, const char* root,
@@ -41,6 +41,9 @@ private:
 	// Return the route-specific upload result without changing the browser upload contract.
 	void sendResponse(MDS_HTTPServer& server, MDS_HTTP::Error error, const char* message) override;
 
+	// Add the configured origin to a CRUD response.
+	void sendCorsHeader(MDS_HTTPServer& server) const;
+
 	// List a directory or stream a file based on the request parameters.
 	void handleGet();
 	// Remove one regular file within the configured root.
@@ -64,5 +67,6 @@ private:
 	MDS_HTTPServer* server_ = nullptr;
 	bool crud_ = false;
 	AccessCheck access_;
+	String corsOrigin_;
 	int uploadStatus_ = 500;
 };
