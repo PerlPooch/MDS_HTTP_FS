@@ -1,4 +1,9 @@
 <!doctype html>
+<!--
+  File Manager for MDS_HTTP_FS
+  Copyright (c) 2026 Marc D. Spencer.
+  SPDX-License-Identifier: MPL-2.0
+-->
 <html lang="en">
 <head>
 	<meta charset="utf-8">
@@ -193,6 +198,7 @@
 		#status[data-state="connected"] { color: #9f9; }
 		#status[data-state="error"] { color: #ff8984; }
 		#space-status { margin-inline-start: auto; color: var(--muted); font-size: 0.875rem; }
+		#file-manager-version { color: var(--muted); font-size: 0.875rem; }
 
 		@media (max-width: 48rem) {
 			.navigation-bar .inner { flex-wrap: wrap; }
@@ -274,6 +280,7 @@
 		<div class="inner">
 			<p id="status" role="status">Disconnected</p>
 			<output id="space-status" aria-label="Filesystem space" hidden></output>
+			<small id="file-manager-version">File Manager v0.1.0</small>
 		</div>
 	</footer>
 

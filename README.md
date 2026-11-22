@@ -25,6 +25,24 @@ void registerWebsiteFiles(MDS_HTTP& http) {
 You can register either route independently. The examples below use `/api/files`
 and `/upload-file` as the application-selected routes.
 
+## File Manager
+
+Open [File Manager/index.html](File%20Manager/index.html) directly or serve it
+from the device. The footer shows the version of the standalone HTML file.
+Bump that version when publishing a new copy. To find the Git change that
+introduced the displayed version, run this from the repository root with the
+version shown on your device:
+
+```sh
+git log -p -S 'File Manager v0.1.0' -- 'File Manager/index.html'
+```
+
+For an exact match, download the deployed HTML and look up its Git blob:
+
+```sh
+git log --find-object="$(git hash-object /path/to/downloaded/file-manager.html)" -- 'File Manager/index.html'
+```
+
 ## File API
 
 For a browser app served from a different origin, pass the allowed origin as
