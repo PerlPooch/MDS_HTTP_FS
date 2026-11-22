@@ -22,11 +22,11 @@ constexpr int duplicateArgument = -2;
 
 // LittleFS limits count bytes and reserve space for the terminating NUL.
 #if defined(CONFIG_LITTLEFS_OBJ_NAME_LEN)
-constexpr size_t maxRenameNameBytes = CONFIG_LITTLEFS_OBJ_NAME_LEN - 1;
+constexpr size_t maxNameBytes = CONFIG_LITTLEFS_OBJ_NAME_LEN - 1;
 #elif defined(ARDUINO_ARCH_ESP8266)
-constexpr size_t maxRenameNameBytes = 31;
+constexpr size_t maxNameBytes = 31;
 #else
-constexpr size_t maxRenameNameBytes = 63;
+constexpr size_t maxNameBytes = 63;
 #endif
 
 // Locate a unique decoded request argument without silently accepting duplicates.
@@ -279,6 +279,10 @@ void MDS_HTTP_FS::addCrud(MDS_HTTP& http, const char* route, fs::FS& filesystem,
 		// Serve the collection or an individual file at the same route.
 		files->handleGet();
 	});
+	server.on(route, HTTP_PUT, [files]() {
+		// Create an empty directory without a multipart upload.
+		files->handleMkdir();
+	});
 	server.on(route, HTTP_PATCH, [files]() {
 		// Apply the same filesystem scope and access check to renames.
 		files->handleRename();
@@ -288,7 +292,7 @@ void MDS_HTTP_FS::addCrud(MDS_HTTP& http, const char* route, fs::FS& filesystem,
 		files->handleDelete();
 	});
 
-	files->addCorsPreflight(route, "GET, POST, PATCH, DELETE");
+	files->addCorsPreflight(route, "GET, POST, PUT, PATCH, DELETE");
 
 	if (spaceInfo) {
 		String spaceRoute(route);
@@ -675,7 +679,7 @@ void MDS_HTTP_FS::handleRename() {
 	}
 
 	const char* separator = std::strrchr(destination.c_str(), '/');
-	if (std::strlen(separator + 1) > maxRenameNameBytes) {
+	if (std::strlen(separator + 1) > maxNameBytes) {
 		server.send(400, "text/plain", "New name exceeds the filesystem name limit\n");
 		return;
 	}
@@ -723,6 +727,82 @@ void MDS_HTTP_FS::handleRename() {
 	}
 
 	server.send(204, "text/plain", "");
+}
+
+// Create missing parents in order and distinguish an existing folder from a new one.
+int MDS_HTTP_FS::createDirectoryTree(const String& path) {
+	for (size_t start = 1;;) {
+		const int separator = path.indexOf('/', start);
+		const size_t end = separator < 0 ? path.length() : static_cast<size_t>(separator);
+		const String component = path.substring(0, end);
+		if (component.length() != end) {
+			return 500;
+		}
+
+		auto entry = filesystem_.open(component.c_str(), "r");
+		const bool created = !entry && filesystem_.mkdir(component.c_str());
+		if (!created) {
+			if (!entry) {
+				// A directory can appear between the initial lookup and mkdir.
+				entry = filesystem_.open(component.c_str(), "r");
+			}
+			if (!entry) {
+				return 500;
+			}
+			if (!entry.isDirectory()) {
+				return 409;
+			}
+			entry.close();
+		}
+
+		if (separator < 0) {
+			return created ? 201 : 200;
+		}
+		start = end + 1;
+	}
+}
+
+// Create an empty directory without requiring a file to be uploaded.
+void MDS_HTTP_FS::handleMkdir() {
+	auto& server = *server_;
+	sendCorsHeader(server);
+	server.sendHeader("Cache-Control", "no-store");
+	if (!canAccess()) {
+		sendCrudError(server, 403);
+		return;
+	}
+	if (uniqueArgumentIndex(server, "path") != missingArgument) {
+		sendCrudError(server, 400);
+		return;
+	}
+
+	String path;
+	const int error = resolvePath("dir", path);
+	if (error) {
+		sendCrudError(server, error);
+		return;
+	}
+
+	// Validate the whole relative path before creating even the first directory.
+	size_t start = root_.length() + (root_ == "/" ? 0 : 1);
+	for (size_t index = start; index <= path.length(); ++index) {
+		if (index == path.length() || path[index] == '/') {
+			if (index - start > maxNameBytes) {
+				server.send(400, "text/plain", "Folder name exceeds the filesystem name limit\n");
+				return;
+			}
+			start = index + 1;
+		}
+	}
+
+	const int status = createDirectoryTree(path);
+	if (status == 409) {
+		server.send(409, "text/plain", "A file occupies the folder path\n");
+	} else if (status == 200 || status == 201) {
+		server.send(status, "text/plain", "");
+	} else {
+		sendCrudError(server, status);
+	}
 }
 
 // Delete a regular file or empty directory identified by the request.

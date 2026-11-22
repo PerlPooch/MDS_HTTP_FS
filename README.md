@@ -28,15 +28,15 @@ and `/upload-file` as the application-selected routes.
 ## File API
 
 For a browser app served from a different origin, pass the allowed origin as
-the last argument to `addCrud()`. Pass `"*"` to allow any origin.
+the argument after the access check in `addCrud()`. Pass `"*"` to allow any origin.
 
 ```cpp
 MDS_HTTP_FS::addCrud(http, "/api/files", LittleFS, "/www", nullptr, "*");
 ```
 
 Omit the origin or pass an empty string to leave CORS disabled. A configured
-origin enables browser preflight for GET, POST, PATCH and DELETE, including requests
-with an `Authorization` header. Any access check supplied to `addCrud()`
+origin enables browser preflight for GET, POST, PUT, PATCH and DELETE,
+including requests with an `Authorization` header. Any access check supplied to `addCrud()`
 still applies to the file operations.
 
 | Request | Success | Response |
@@ -46,6 +46,7 @@ still applies to the file operations.
 | `GET /api/files/space` | `200` | JSON with the mounted volume's `totalBytes` and `usedBytes` when configured |
 | `GET /api/files?path=assets/style.css` | `200` | File bytes with content type `application/octet-stream` |
 | `POST /api/files?path=assets/style.css` | `201` for creation, `200` for replacement | Plain-text confirmation |
+| `PUT /api/files?dir=assets/icons` | `201` if created, `200` if already a directory | Empty response |
 | `PATCH /api/files?path=assets/style.css&name=main.css` | `204` | Empty response after renaming |
 | `PATCH /api/files?path=assets/style.css&to=styles/style.css` | `204` | Empty response after moving |
 | `DELETE /api/files?path=assets/style.css` | `204` | Empty response after deleting a file or empty directory |
@@ -68,12 +69,18 @@ the filesystem. A root that has yet to be created lists as `[]`.
 ```
 
 Use a URL-encoded, root-relative `path` or `dir`. Omit both to list the root.
-A GET accepts at most one of them. POST, PATCH and DELETE require `path`.
+A GET accepts at most one of them. POST, PATCH and DELETE require `path`. PUT
+takes a single `dir`. No request body is needed.
 
 - POST takes one multipart file field named `file`. The query `path` selects the
   destination. Missing parent directories are created when needed.
 - A successful POST publishes the complete upload by rename. Empty files are
   valid. Failed or interrupted uploads preserve the previous file.
+- PUT creates a directory and any missing parents. It returns `200` if the
+  destination already exists as a directory. A regular file anywhere along the
+  path returns `409`. Every new path component uses the same byte limit as a
+  PATCH destination basename. A retry can finish creating missing folders
+  after a storage error.
 - DELETE removes a regular file or empty directory. A non-empty directory
   returns `409` with its contents intact.
 - PATCH takes exactly one `name` or `to` argument in addition to `path`. Give
@@ -88,11 +95,12 @@ A GET accepts at most one of them. POST, PATCH and DELETE require `path`.
 
 | Error | Meaning |
 | --- | --- |
-| `400` | Invalid, empty, or duplicate path parameter, both `dir` and `path` on GET, an invalid new name, or an invalid multipart upload |
+| `400` | Invalid, empty, duplicate, or conflicting path parameters, an invalid new name, or an invalid multipart upload |
 | `403` | The application's access check denied the request |
 | `404` | The requested file or directory is missing |
 | `409` | The request expects a file where a directory exists, a directory where a file exists, the rename destination is occupied, or the directory to delete is non-empty |
 | `500` | A filesystem operation failed or the configured root is invalid |
+| `503` | Filesystem capacity is unavailable |
 
 Error bodies are plain text. Paths reject leading slashes, empty components,
 `.` and `..` components, backslashes, and control characters. Both

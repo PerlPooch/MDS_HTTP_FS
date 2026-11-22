@@ -17,7 +17,7 @@ public:
 	// Report the mounted volume's total and used bytes, or return false if unavailable.
 	using SpaceInfoProvider = std::function<bool(size_t& totalBytes, size_t& usedBytes)>;
 
-	// Register list, download, upload, rename and delete at a single route before http.begin().
+	// Register file operations and directory creation at a single route before http.begin().
 	static void addCrud(MDS_HTTP& http, const char* route, fs::FS& filesystem, const char* root,
 		AccessCheck access = nullptr, const char* corsOrigin = nullptr, SpaceInfoProvider spaceInfo = nullptr);
 
@@ -57,6 +57,10 @@ private:
 	void handleDelete();
 	// Rename or move one file or directory without replacing another entry.
 	void handleRename();
+	// Create a directory from the root-relative dir parameter.
+	void handleMkdir();
+	// Create missing directory components and report the outcome for the final directory.
+	int createDirectoryTree(const String& path);
 	// Stream a JSON array containing the immediate children of a directory.
 	void listDirectory(const String& path);
 	// Check the application policy before any filesystem operation.
