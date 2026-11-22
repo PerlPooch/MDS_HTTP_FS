@@ -1,0 +1,1907 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>File Manager</title>
+	<style>
+		/* Adapt the MQTT Agent palette and MDS_HTTP typography to the pane layout. */
+		:root {
+			color-scheme: dark;
+			--background: #111;
+			--panel: #1b1b1b;
+			--border: #333;
+			--text: #fff;
+			--muted: #b7b7b7;
+			--accent: #3798ff;
+			--radius: 8px;
+		}
+		* { box-sizing: border-box; }
+		body {
+			display: grid;
+			grid-template-rows: auto auto 1fr auto;
+			min-height: 100vh;
+			margin: 0;
+			color: var(--text);
+			background: var(--background);
+			font: 1rem/1.5 Helvetica, Arial, sans-serif;
+		}
+		.inner {
+			width: min(100%, 76rem);
+			margin-inline: auto;
+			padding-inline: clamp(1rem, 4vw, 2.5rem);
+		}
+		.site-header .inner { padding-block: 1.5rem 1.25rem; }
+		h1, h2 { margin: 0; color: var(--accent); }
+		h1 { font-size: 1.625rem; }
+		h2 { font-size: 1.125rem; }
+		.navigation-bar, footer {
+			background: var(--panel);
+			border-block: 1px solid var(--border);
+		}
+		.navigation-bar .inner {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 1rem 2rem;
+			padding-block: 0.75rem;
+		}
+		nav a {
+			display: block;
+			padding: 0.5rem 0.75rem;
+			border: 1px solid #315171;
+			border-radius: var(--radius);
+			color: #9acbff;
+			background: #182536;
+			text-decoration: none;
+		}
+		.connection {
+			display: flex;
+			align-items: end;
+			flex-wrap: wrap;
+			gap: 0.75rem;
+			padding-inline-start: 1.25rem;
+			border-inline-start: 1px solid var(--border);
+		}
+		label {
+			display: flex;
+			flex-direction: column;
+			gap: 0.25rem;
+			color: var(--muted);
+			font-size: 0.875rem;
+		}
+		input, button {
+			min-height: 2.5rem;
+			padding: 0.375rem 0.75rem;
+			border: 1px solid #555;
+			border-radius: var(--radius);
+			color: var(--text);
+			font: inherit;
+		}
+		input {
+			width: 12rem;
+			max-width: 100%;
+			background: #000;
+			font-size: 1rem;
+		}
+		button { background: #2a2a2a; cursor: pointer; }
+		button:hover:not(:disabled) { background: #333; }
+		button:disabled { opacity: 0.65; cursor: wait; }
+		:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+		main.inner { padding-block: 1.5rem 2rem; }
+		.card {
+			overflow: hidden;
+			min-height: 16rem;
+			border: 1px solid var(--border);
+			border-radius: var(--radius);
+			background: var(--panel);
+		}
+		.card-header {
+			display: flex;
+			justify-content: space-between;
+			align-items: baseline;
+			gap: 0.5rem 1rem;
+			flex-wrap: wrap;
+			padding: 1rem 1.25rem;
+			border-bottom: 1px solid var(--border);
+		}
+		.folder-location {
+			display: flex;
+			flex-wrap: wrap;
+			justify-content: flex-end;
+			align-items: center;
+			gap: 0.25rem;
+			min-width: 0;
+			margin-inline-start: auto;
+			color: var(--muted);
+		}
+		.folder-location button {
+			display: inline-flex;
+			align-items: center;
+			gap: 0.375rem;
+			min-height: 2rem;
+			padding: 0.125rem 0.5rem;
+			max-width: 100%;
+			overflow-wrap: anywhere;
+		}
+		.folder-location svg { display: block; width: 1rem; height: 1rem; fill: currentColor; }
+		.file-tools { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 1.25rem; border-bottom: 1px solid var(--border); }
+		main.is-drop-target .card { outline: 2px solid var(--accent); outline-offset: -2px; }
+		dialog {
+			position: fixed;
+			inset: 33.333vh 0 auto;
+			inset-block-start: 33.333dvh;
+			width: min(28rem, calc(100% - 2rem));
+			max-width: none;
+			max-height: 46.667vh;
+			max-height: 46.667dvh;
+			margin: 0 auto;
+			padding: clamp(0.75rem, 3vh, 1.25rem);
+			overflow: hidden;
+			color: var(--text);
+			background: var(--panel);
+			border: 1px solid #555;
+			border-radius: var(--radius);
+		}
+		dialog[open] { display: flex; flex-direction: column; }
+		dialog form { display: flex; flex-direction: column; gap: 0.625rem; min-height: 0; }
+		dialog p { margin: 0; }
+		dialog::backdrop { background: #0009; }
+		#delete-names { margin-block: 0; min-height: 0; overflow: auto; overflow-wrap: anywhere; }
+		#move-dialog { width: min(48rem, calc(100% - 2rem)); }
+		.move-title { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem 0.5rem; flex-shrink: 0; }
+		#move-path {
+			justify-content: flex-start;
+			margin-inline-start: 0;
+			max-height: 4.5rem;
+			overflow: auto;
+		}
+		#move-folders { display: grid; gap: 0.25rem; min-height: 0; overflow: auto; }
+		#move-folders button { text-align: start; overflow-wrap: anywhere; }
+		#move-status:empty, #move-folders:empty { display: none; }
+		.dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; flex-shrink: 0; }
+		#blocked-tabs { padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--border); }
+		#blocked-tabs p { margin: 0 0 0.5rem; }
+		#folder-tab-buttons { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+		#file-message { margin: 0; padding: 1.25rem; color: var(--muted); }
+		table { width: 100%; border-collapse: collapse; }
+		th, td {
+			padding: 0.625rem 1.25rem;
+			border-bottom: 1px solid var(--border);
+			text-align: start;
+		}
+		th { color: var(--muted); font-size: 0.875rem; }
+		td:first-child { overflow-wrap: anywhere; }
+		.file-name { display: flex; align-items: center; gap: 0.5rem; }
+		.file-name svg { width: 1rem; height: 1rem; flex: 0 0 1rem; fill: currentColor; color: var(--muted); }
+		.file-name input { min-height: 1.75rem; width: 100%; min-width: 0; padding: 0.125rem 0.375rem; }
+		tbody tr:last-child td { border-bottom: 0; }
+		tbody tr { user-select: none; }
+		tbody tr[aria-selected="true"] { background: #194775; }
+		.is-move-target { outline: 2px solid var(--accent); outline-offset: -2px; }
+		tbody tr:focus-visible { outline-offset: -2px; }
+		th:last-child, td:last-child { text-align: end; }
+		footer { border-bottom: 0; }
+		footer .inner {
+			display: flex;
+			flex-wrap: wrap;
+			justify-content: space-between;
+			gap: 0.375rem 1rem;
+			padding-block: 0.875rem;
+		}
+		#status { margin: 0; color: var(--muted); font-size: 0.875rem; }
+		#status[data-state="connected"] { color: #9f9; }
+		#status[data-state="error"] { color: #ff8984; }
+		#space-status { margin-inline-start: auto; color: var(--muted); font-size: 0.875rem; }
+
+		@media (max-width: 48rem) {
+			.navigation-bar .inner { flex-wrap: wrap; }
+			.connection {
+				width: 100%;
+				padding-inline-start: 0;
+				padding-block-start: 0.75rem;
+				border-inline-start: 0;
+				border-block-start: 1px solid var(--border);
+			}
+			.connection label { flex: 1 1 10rem; }
+			.connection input { width: 100%; }
+		}
+		@media (max-width: 30rem) {
+			th, td { padding-inline: 0.625rem; }
+		}
+	</style>
+</head>
+<body>
+	<header class="site-header">
+		<div class="inner">
+			<h1>File Manager</h1>
+		</div>
+	</header>
+
+	<div class="navigation-bar">
+		<div class="inner">
+			<nav aria-label="Main navigation">
+				<a href="#files" aria-current="page">Files</a>
+			</nav>
+			<form class="connection" id="connection" aria-label="Connection">
+				<label for="device">Device address
+					<input id="device" type="text" placeholder="Device IP or hostname" autocomplete="off" spellcheck="false" required>
+				</label>
+				<label for="key">File API key
+					<input id="key" type="password" autocomplete="off" spellcheck="false">
+				</label>
+				<button type="submit">Apply</button>
+			</form>
+		</div>
+	</div>
+
+	<main class="inner" id="files">
+		<section class="card" aria-labelledby="files-heading">
+			<div class="card-header">
+				<h2 id="files-heading" tabindex="-1">Files</h2>
+				<nav class="folder-location" id="folder-path" aria-label="Folder path"></nav>
+			</div>
+			<div class="file-tools">
+				<button id="new-folder" type="button" disabled>New Folder</button>
+				<button id="upload-files" type="button" disabled>Upload</button>
+				<input id="upload-input" type="file" multiple hidden>
+				<button id="upload-folder" type="button" disabled>Upload Folder</button>
+				<input id="upload-folder-input" type="file" webkitdirectory multiple hidden>
+				<button id="download-item" type="button" disabled>Download</button>
+				<button id="rename-item" type="button" disabled>Rename</button>
+				<button id="move-items" type="button" disabled>Move to Folder</button>
+				<button id="delete-items" type="button" disabled>Delete</button>
+			</div>
+			<section id="blocked-tabs" aria-labelledby="blocked-tabs-message" hidden>
+				<p id="blocked-tabs-message" role="status">The browser blocked some tabs. Open each remaining folder below.</p>
+				<div id="folder-tab-buttons"></div>
+			</section>
+			<p id="file-message">Connect to a device to list its files.</p>
+			<table id="file-list" role="grid" aria-multiselectable="true" aria-labelledby="files-heading" hidden>
+				<thead>
+					<tr>
+						<th scope="col">Name</th>
+						<th scope="col">Type</th>
+						<th scope="col">Size</th>
+					</tr>
+				</thead>
+				<tbody></tbody>
+			</table>
+		</section>
+	</main>
+
+	<footer>
+		<div class="inner">
+			<p id="status" role="status">Disconnected</p>
+			<output id="space-status" aria-label="Filesystem space" hidden></output>
+		</div>
+	</footer>
+
+	<dialog id="delete-dialog" aria-labelledby="delete-heading" aria-describedby="delete-notice">
+		<form method="dialog">
+			<h2 id="delete-heading">Delete selected items?</h2>
+			<p id="delete-notice">Deletion is permanent. Non-empty folders will be kept.</p>
+			<ul id="delete-names"></ul>
+			<div class="dialog-actions">
+				<button type="submit" value="cancel" autofocus>Cancel</button>
+				<button type="submit" value="delete">Delete</button>
+			</div>
+		</form>
+	</dialog>
+
+	<dialog id="move-dialog" aria-labelledby="move-heading move-path">
+		<form method="dialog">
+			<div class="move-title">
+				<h2 id="move-heading" tabindex="-1">Move selected items to</h2>
+				<nav class="folder-location" id="move-path" aria-label="Destination folder"></nav>
+			</div>
+			<div id="move-folders" aria-label="Subfolders"></div>
+			<p id="move-status" role="status"></p>
+			<div class="dialog-actions">
+				<button type="submit" value="cancel" autofocus>Cancel</button>
+				<button id="move-submit" type="submit" value="move" disabled>Move Here</button>
+			</div>
+		</form>
+	</dialog>
+
+	<template id="file-icon">
+		<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512" aria-hidden="true" focusable="false">
+			<!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. -->
+			<path d="M0 64C0 28.7 28.7 0 64 0L224 0l0 128c0 17.7 14.3 32 32 32l128 0 0 288c0 35.3-28.7 64-64 64L64 512c-35.3 0-64-28.7-64-64L0 64zm384 64l-128 0L256 0 384 128z"/>
+		</svg>
+	</template>
+	<template id="folder-icon">
+		<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-hidden="true" focusable="false">
+			<!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. -->
+			<path d="M64 480H448c35.3 0 64-28.7 64-64V160c0-35.3-28.7-64-64-64H288c-10.1 0-19.6-4.7-25.6-12.8L243.2 57.6C231.1 41.5 212.1 32 192 32H64C28.7 32 0 60.7 0 96V416c0 35.3 28.7 64 64 64z"/>
+		</svg>
+	</template>
+	<template id="home-icon">
+		<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512" aria-hidden="true" focusable="false">
+			<!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. -->
+			<path d="M575.8 255.5c0 18-15 32.1-32 32.1l-32 0 .7 160.2c0 2.7-.2 5.4-.5 8.1l0 16.2c0 22.1-17.9 40-40 40l-16 0c-1.1 0-2.2 0-3.3-.1c-1.4 .1-2.8 .1-4.2 .1L416 512l-24 0c-22.1 0-40-17.9-40-40l0-24 0-64c0-17.7-14.3-32-32-32l-64 0c-17.7 0-32 14.3-32 32l0 64 0 24c0 22.1-17.9 40-40 40l-24 0-31.9 0c-1.5 0-3-.1-4.5-.2c-1.2 .1-2.4 .2-3.6 .2l-16 0c-22.1 0-40-17.9-40-40l0-112c0-.9 0-1.9 .1-2.8l0-69.7-32 0c-18 0-32-14-32-32.1c0-9 3-17 10-24L266.4 8c7-7 15-8 22-8s15 2 21 7L564.8 231.5c8 7 12 15 11 24z"/>
+		</svg>
+	</template>
+
+	<script>
+		const form = document.querySelector('#connection');
+		const device = document.querySelector('#device');
+		const key = document.querySelector('#key');
+		const connectButton = form.querySelector('button');
+		const filePane = document.querySelector('#files');
+		const fileList = document.querySelector('#file-list');
+		const fileRows = fileList.tBodies[0];
+		const fileMessage = document.querySelector('#file-message');
+		const filesHeading = document.querySelector('#files-heading');
+		const folderPath = document.querySelector('#folder-path');
+		const newFolderButton = document.querySelector('#new-folder');
+		const uploadButton = document.querySelector('#upload-files');
+		const uploadInput = document.querySelector('#upload-input');
+		const uploadFolderButton = document.querySelector('#upload-folder');
+		const uploadFolderInput = document.querySelector('#upload-folder-input');
+		const downloadButton = document.querySelector('#download-item');
+		const renameButton = document.querySelector('#rename-item');
+		const moveButton = document.querySelector('#move-items');
+		const moveDialog = document.querySelector('#move-dialog');
+		const moveHeading = document.querySelector('#move-heading');
+		const movePath = document.querySelector('#move-path');
+		const moveFolders = document.querySelector('#move-folders');
+		const moveStatus = document.querySelector('#move-status');
+		const moveSubmit = document.querySelector('#move-submit');
+		const deleteButton = document.querySelector('#delete-items');
+		const deleteDialog = document.querySelector('#delete-dialog');
+		const deleteHeading = document.querySelector('#delete-heading');
+		const deleteNames = document.querySelector('#delete-names');
+		const blockedTabs = document.querySelector('#blocked-tabs');
+		const folderTabButtons = document.querySelector('#folder-tab-buttons');
+		const connectionStatus = document.querySelector('#status');
+		const spaceStatus = document.querySelector('#space-status');
+		const fileIcon = document.querySelector('#file-icon');
+		const folderIcon = document.querySelector('#folder-icon');
+		const homeIcon = document.querySelector('#home-icon');
+		const formatNumber = new Intl.NumberFormat();
+		const formatCapacity = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
+		const selectedRows = new Set();
+		const fileDocument = location.protocol === 'file:';
+		const storageScope = fileDocument ? location.pathname + ':' : '';
+		const keyStoragePrefix = 'mds-file-manager:key:' + storageScope;
+		const deviceStorageKey = 'mds-file-manager:device:' + storageScope;
+		let visibleEntries = [];
+		let selectionAnchor = null;
+		let focusIndex = 0;
+		let selectionBeforeClick = null;
+		let connection = null;
+		let spaceRequest = null;
+		let currentPath = '';
+		let directoryLoaded = false;
+		let directoryRequest = null;
+		let fileChangePending = false;
+		let downloadPending = false;
+		let renameEditor = null;
+		let pendingDeletion = null;
+		let pendingMove = null;
+		let movePickerRequest = null;
+		let draggedMove = null;
+		let moveTargetElement = null;
+		let keyDeviceOrigin = null;
+
+		const isLocalPreview = fileDocument
+			|| ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+
+		// Accept a bare host or an HTTP(S) origin without credentials or a URL path.
+		function fileEndpoint(address) {
+			const scheme = isLocalPreview ? 'http:' : location.protocol;
+			const url = new URL(address.includes('://') ? address : scheme + '//' + address);
+
+			if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password
+				|| url.pathname !== '/' || url.search || url.hash) {
+				throw new Error('Enter a device IP address, hostname, or HTTP(S) origin.');
+			}
+
+			return new URL('/api/files', url.origin);
+		}
+
+		// Prefer the last successful device, with a full origin for the fallback too.
+		function initialDeviceAddress() {
+			const fallback = isLocalPreview ? 'http://192.168.0.120' : location.origin;
+			try {
+				const savedAddress = localStorage.getItem(deviceStorageKey);
+				return savedAddress ? fileEndpoint(savedAddress).origin : fallback;
+			} catch {
+				return fallback;
+			}
+		}
+
+		// Remember only devices that successfully returned a file listing.
+		function rememberDevice(origin) {
+			try {
+				localStorage.setItem(deviceStorageKey, origin);
+				return true;
+			} catch {
+				return false;
+			}
+		}
+
+		// Load only the saved key for the device currently entered in the form.
+		function showSavedKey() {
+			let origin = null;
+			try {
+				origin = fileEndpoint(device.value.trim()).origin;
+			} catch {
+				// An incomplete address has no associated key.
+			}
+
+			if (origin === keyDeviceOrigin) {
+				return;
+			}
+			keyDeviceOrigin = origin;
+			key.value = '';
+			if (origin) {
+				try {
+					key.value = localStorage.getItem(keyStoragePrefix + origin) ?? '';
+				} catch {
+					// The user can still enter a key when browser storage is unavailable.
+				}
+			}
+		}
+
+		// Store the verified credential by device origin, or remove it when submitted blank.
+		function rememberKey(origin, accessKey) {
+			try {
+				const storageKey = keyStoragePrefix + origin;
+				if (accessKey) {
+					localStorage.setItem(storageKey, accessKey);
+				} else {
+					localStorage.removeItem(storageKey);
+				}
+				return true;
+			} catch {
+				return false;
+			}
+		}
+
+		// Refresh a matching tab's key field without replacing an edit in progress.
+		function syncSavedKey(event) {
+			if (keyDeviceOrigin && event.key === keyStoragePrefix + keyDeviceOrigin
+				&& key.value === (event.oldValue ?? '')) {
+				key.value = event.newValue ?? '';
+			}
+		}
+
+		// Pair each type icon with a literal filename and render the remaining columns.
+		function showFiles(entries) {
+			resetFileRows();
+			visibleEntries = entries;
+			for (const [index, entry] of entries.entries()) {
+				const row = fileRows.insertRow();
+				const isDirectory = entry.type === 'directory';
+				const icon = isDirectory ? folderIcon : fileIcon;
+				const name = document.createElement('span');
+				const label = document.createElement('span');
+
+				name.className = 'file-name';
+				label.textContent = entry.name;
+				name.append(icon.content.cloneNode(true), label);
+				row.tabIndex = index === 0 ? 0 : -1;
+				row.draggable = true;
+				row.setAttribute('aria-selected', 'false');
+				row.insertCell().append(name);
+				row.insertCell().textContent = isDirectory ? 'Folder' : 'File';
+				row.insertCell().textContent = isDirectory ? '—' : formatNumber.format(entry.size) + ' B';
+			}
+
+			fileList.hidden = entries.length === 0;
+			fileMessage.hidden = entries.length > 0;
+			fileMessage.textContent = 'This directory is empty.';
+		}
+
+		// Reset the row indices and selection whenever the displayed directory changes.
+		function resetFileRows() {
+			endRename();
+			endRowDrag();
+			fileRows.replaceChildren();
+			visibleEntries = [];
+			clearSelection();
+			focusIndex = 0;
+		}
+
+		// Keep the selection highlight and accessibility state in sync.
+		function showSelection() {
+			for (const row of fileRows.rows) {
+				row.setAttribute('aria-selected', selectedRows.has(row.sectionRowIndex));
+			}
+			updateFileControls();
+		}
+
+		// Clear the selection and its anchor so the next Shift-click starts a new range.
+		function clearSelection() {
+			selectedRows.clear();
+			selectionAnchor = null;
+			selectionBeforeClick = null;
+			showSelection();
+		}
+
+		// Give the table a single tab stop while letting focus move between rows.
+		function focusRow(index, preventScroll = false) {
+			fileRows.rows[focusIndex].tabIndex = -1;
+			focusIndex = index;
+			const row = fileRows.rows[index];
+			row.tabIndex = 0;
+			row.focus({ preventScroll });
+		}
+
+		// Match Finder's plain click, Shift-click range and Command-click toggle.
+		function selectRow(index, extend, toggle) {
+			if (extend && selectionAnchor !== null) {
+				selectedRows.clear();
+				const first = Math.min(selectionAnchor, index);
+				const last = Math.max(selectionAnchor, index);
+				for (let position = first; position <= last; position++) {
+					selectedRows.add(position);
+				}
+			} else if (toggle && selectedRows.has(index)) {
+				selectedRows.delete(index);
+				if (selectedRows.size === 0) {
+					selectionAnchor = null;
+				}
+			} else {
+				if (!toggle) {
+					selectedRows.clear();
+				}
+				selectedRows.add(index);
+				selectionAnchor = index;
+			}
+
+			showSelection();
+		}
+
+		// Save the group before a plain click so a subsequent double-click can activate it.
+		function clickFile(event) {
+			const row = event.target.closest('tr');
+			const plainRepeat = event.detail > 1 && !event.shiftKey && !event.metaKey;
+			if (!row || event.target.closest('input') || plainRepeat || event.ctrlKey) {
+				return;
+			}
+
+			const index = row.sectionRowIndex;
+			const clickedSelection = !event.shiftKey && !event.metaKey && !event.altKey
+				&& selectedRows.size > 1 && selectedRows.has(index);
+			selectionBeforeClick = clickedSelection
+				? { index, rows: [...selectedRows], anchor: selectionAnchor }
+				: null;
+
+			focusRow(index, true);
+			selectRow(index, event.shiftKey, event.metaKey);
+		}
+
+		// Send the clicked item and its full selection to the primary-action handler.
+		function doubleClickFile(event) {
+			const row = event.target.closest('tr');
+			if (!row || event.target.closest('input') || event.shiftKey || event.metaKey || event.altKey || event.ctrlKey) {
+				return;
+			}
+
+			const index = row.sectionRowIndex;
+			if (selectionBeforeClick?.index === index) {
+				for (const selectedIndex of selectionBeforeClick.rows) {
+					selectedRows.add(selectedIndex);
+				}
+				selectionAnchor = selectionBeforeClick.anchor;
+				showSelection();
+			}
+			selectionBeforeClick = null;
+
+			fileList.dispatchEvent(new CustomEvent('fileactivate', {
+				bubbles: true,
+				detail: {
+					item: visibleEntries[index],
+					selection: visibleEntries.filter((entry, position) => selectedRows.has(position)),
+				},
+			}));
+		}
+
+		// Clicking unused space in the main pane deselects the current rows.
+		function clickFilePane(event) {
+			if (!event.target.closest('tr, button, a')) {
+				clearSelection();
+			}
+		}
+
+		// Move through the rows with the keyboard and allow the usual Mac selection shortcuts.
+		function useFileKeys(event) {
+			const index = event.target.sectionRowIndex;
+			switch (event.key) {
+				case 'ArrowDown':
+				case 'ArrowUp': {
+					const step = event.key === 'ArrowDown' ? 1 : -1;
+					const next = Math.max(0, Math.min(index + step, fileRows.rows.length - 1));
+					if (event.shiftKey && selectionAnchor === null) {
+						selectionAnchor = index;
+					}
+					focusRow(next);
+					selectRow(next, event.shiftKey, false);
+					break;
+				}
+				case ' ':
+					selectRow(index, event.shiftKey, event.metaKey);
+					break;
+				case 'Escape':
+					clearSelection();
+					break;
+				case 'Enter':
+					if (renameButton.disabled) {
+						return;
+					}
+					beginRename();
+					break;
+				case 'a':
+					if (!event.metaKey) {
+						return;
+					}
+					for (const row of fileRows.rows) {
+						selectedRows.add(row.sectionRowIndex);
+					}
+					selectionAnchor = index;
+					showSelection();
+					break;
+				default:
+					return;
+			}
+
+			event.preventDefault();
+		}
+
+		// Connect with the supplied credentials and open the tab's initial directory.
+		async function connect(event) {
+			event.preventDefault();
+
+			let endpoint;
+			try {
+				endpoint = fileEndpoint(device.value.trim());
+			} catch {
+				connectionStatus.dataset.state = 'error';
+				connectionStatus.textContent = 'Enter a device IP address, hostname, or HTTP(S) origin.';
+				device.focus();
+				return;
+			}
+
+			const accessKey = key.value.trim();
+			if (!accessKey) {
+				rememberKey(endpoint.origin, '');
+			}
+
+			if (!await startConnection(endpoint, accessKey)) {
+				return;
+			}
+
+			const deviceSaved = rememberDevice(endpoint.origin);
+			const keySaved = !accessKey || rememberKey(endpoint.origin, accessKey);
+			if (!deviceSaved || !keySaved) {
+				connectionStatus.textContent += '. Browser storage is unavailable for connection details.';
+			}
+		}
+
+		// Switch devices and read capacity after the first directory request finishes.
+		async function startConnection(endpoint, accessKey) {
+			device.value = endpoint.origin;
+			keyDeviceOrigin = endpoint.origin;
+			key.value = accessKey;
+
+			const activeConnection = { endpoint, accessKey };
+			connection = activeConnection;
+			spaceRequest?.abort();
+			spaceStatus.hidden = true;
+			const loaded = await loadFolderFromUrl();
+			void refreshSpace(activeConnection);
+			return loaded;
+		}
+
+		// Reset the listing for the URL in this tab without changing the device connection.
+		function loadFolderFromUrl() {
+			if (deleteDialog.open) {
+				deleteDialog.close();
+			}
+			if (moveDialog.open) {
+				moveDialog.close();
+			}
+			directoryLoaded = false;
+			folderTabButtons.replaceChildren();
+			blockedTabs.hidden = true;
+			resetFileRows();
+			fileList.hidden = true;
+			fileMessage.hidden = false;
+			fileMessage.textContent = 'Loading files…';
+			return loadDirectory(folderFromUrl(), { connecting: true });
+		}
+
+		// Download an activated file selection or open the selected folders.
+		function activateItem(event) {
+			const { item, selection } = event.detail;
+			if (!item || !connection || connectButton.disabled) {
+				return;
+			}
+			if (item.type === 'file') {
+				void downloadFiles(hasOnlyFiles(selection) ? selection : [item]);
+				return;
+			}
+
+			const prefix = currentPath ? currentPath + '/' : '';
+			const folders = [item, ...selection.filter((entry) => entry !== item && entry.type === 'directory')];
+			if (folders.length === 1) {
+				void loadDirectory(prefix + item.name, { updateUrl: true });
+				return;
+			}
+
+			folderTabButtons.replaceChildren();
+			for (const folder of folders) {
+				const path = prefix + folder.name;
+				if (!openFolderTab(path)) {
+					addFolderTabButton(folder.name, path);
+				}
+			}
+			blockedTabs.hidden = !folderTabButtons.childElementCount;
+		}
+
+		// Read the requested folder from the current URL, including after history navigation.
+		function folderFromUrl() {
+			return new URLSearchParams(location.search).get('path') ?? '';
+		}
+
+		// Build a same-page URL with the requested folder in the query string.
+		function folderUrl(path) {
+			const url = new URL(location.href);
+			url.search = path ? new URLSearchParams({ path }) : '';
+			url.hash = '';
+			return url;
+		}
+
+		// Record folder navigation without reloading when the browser permits it.
+		function updateFolderUrl(path) {
+			if (folderFromUrl() === path) {
+				return true;
+			}
+
+			const url = folderUrl(path);
+			try {
+				history.pushState(null, '', url.href);
+				return true;
+			} catch {
+				location.assign(url.href);
+				return false;
+			}
+		}
+
+		// Follow Back and Forward without adding another history entry.
+		function restoreFolderFromUrl() {
+			if (connection && folderFromUrl() !== currentPath) {
+				void loadFolderFromUrl();
+			}
+		}
+
+		// Open a folder URL that reads its connection from browser storage.
+		function openFolderTab(path) {
+			rememberDevice(connection.endpoint.origin);
+			return Boolean(window.open(folderUrl(path).href, '_blank'));
+		}
+
+		// Give each blocked folder its own user gesture to retry opening a tab.
+		function addFolderTabButton(name, path) {
+			const button = document.createElement('button');
+			button.type = 'button';
+			button.textContent = 'Open ' + name;
+			button.addEventListener('click', () => {
+				// Keep the retry available when the browser still blocks the tab.
+				if (openFolderTab(path)) {
+					button.remove();
+					blockedTabs.hidden = !folderTabButtons.childElementCount;
+				}
+			});
+			folderTabButtons.append(button);
+		}
+
+		// Open the selected breadcrumb on the current device when the file API is idle.
+		function openBreadcrumb(event) {
+			const button = event.target.closest('button[data-path]');
+			if (button && connection && !connectButton.disabled) {
+				void loadDirectory(button.dataset.path, { updateUrl: true });
+			}
+		}
+
+		// Update the current directory and the breadcrumb in the Files pane.
+		function showFolderPath(path) {
+			currentPath = path;
+			renderFolderBreadcrumbs(folderPath, path);
+		}
+
+		// Give the root and each named path segment its own folder button.
+		function renderFolderBreadcrumbs(container, path, showRootLabel = false) {
+			const segments = path ? ['', ...path.split('/')] : [''];
+			const breadcrumbs = document.createDocumentFragment();
+			let targetPath = '';
+			for (const [index, label] of segments.entries()) {
+				if (index > 0) {
+					targetPath += (index > 1 ? '/' : '') + label;
+					if (!label) {
+						continue;
+					}
+				}
+
+				const button = document.createElement('button');
+				button.type = 'button';
+				button.dataset.path = targetPath;
+				if (index === 0) {
+					button.append(homeIcon.content.cloneNode(true));
+					button.setAttribute('aria-label', 'Root folder');
+					if (showRootLabel) {
+						button.append('Root');
+					}
+				} else {
+					button.textContent = '/' + label;
+				}
+				if (targetPath === path) {
+					button.setAttribute('aria-current', 'location');
+				}
+				breadcrumbs.append(button);
+			}
+			container.replaceChildren(breadcrumbs);
+		}
+
+		// Keep connection and folder actions unavailable during file API operations.
+		function updateFileControls() {
+			const busy = directoryRequest !== null || fileChangePending || downloadPending;
+			connectButton.disabled = busy;
+			newFolderButton.disabled = busy || !directoryLoaded || renameEditor !== null;
+			uploadButton.disabled = busy || !directoryLoaded || renameEditor !== null;
+			uploadFolderButton.disabled = uploadButton.disabled;
+			downloadButton.disabled = busy || !directoryLoaded || renameEditor !== null
+				|| !hasOnlyFiles(getSelectedEntries());
+			renameButton.disabled = busy || !directoryLoaded || renameEditor !== null || selectedRows.size !== 1;
+			deleteButton.disabled = busy || !directoryLoaded || renameEditor !== null || selectedRows.size === 0;
+			moveButton.disabled = deleteButton.disabled;
+		}
+
+		// Read the selected entries in their displayed order.
+		function getSelectedEntries() {
+			return visibleEntries.filter((entry, index) => selectedRows.has(index));
+		}
+
+		// Require at least one file and exclude folders from download batches.
+		function hasOnlyFiles(entries) {
+			return entries.length > 0 && entries.every((entry) => entry.type === 'file');
+		}
+
+		// Join a folder and a basename without a leading slash.
+		function childPath(folder, name) {
+			return folder ? folder + '/' + name : name;
+		}
+
+		// Capture the selected rows and their origin before opening a picker or starting a drag.
+		function captureMove() {
+			return { device: connection, source: currentPath, items: getSelectedEntries() };
+		}
+
+		// Exclude no-op destinations and folders inside any selected source folder.
+		function canMoveTo(request, destination) {
+			return destination !== request.source && !request.items.some((entry) => {
+				// A file cannot contain another folder.
+				if (entry.type !== 'directory') {
+					return false;
+				}
+				const source = childPath(request.source, entry.name);
+				return destination === source || destination.startsWith(source + '/');
+			});
+		}
+
+		// Format byte counts in binary units compact enough for the footer.
+		function spaceInUnits(bytes) {
+			const units = ['B', 'KiB', 'MiB', 'GiB'];
+			let unit = 0;
+			while (bytes >= 1024 && unit < units.length - 1) {
+				bytes /= 1024;
+				unit++;
+			}
+			return formatCapacity.format(bytes) + ' ' + units[unit];
+		}
+
+		// Refresh volume capacity independently of the file listing and its status message.
+		async function refreshSpace(activeConnection) {
+			if (connection !== activeConnection || activeConnection.spaceUnsupported) {
+				return;
+			}
+
+			spaceRequest?.abort();
+			const controller = new AbortController();
+			spaceRequest = controller;
+			const timeout = setTimeout(() => controller.abort(), 8000);
+			const { endpoint, accessKey } = activeConnection;
+			const url = new URL(endpoint);
+			url.pathname += '/space';
+			let label = '';
+			try {
+				const response = await fetch(url, {
+					headers: accessKey ? { Authorization: 'Bearer ' + accessKey } : {},
+					credentials: 'omit',
+					redirect: 'error',
+					signal: controller.signal,
+				});
+				if (response.status === 404) {
+					activeConnection.spaceUnsupported = true;
+				}
+				if (response.ok) {
+					const { totalBytes, usedBytes } = await response.json();
+					if (Number.isSafeInteger(totalBytes) && Number.isSafeInteger(usedBytes)
+						&& totalBytes > 0 && usedBytes >= 0 && usedBytes <= totalBytes) {
+						label = spaceInUnits(totalBytes - usedBytes) + ' free of ' + spaceInUnits(totalBytes);
+					}
+				}
+			} catch {
+				// Capacity is optional and a failed request leaves the rest of the UI usable.
+			} finally {
+				clearTimeout(timeout);
+				if (spaceRequest === controller) {
+					spaceRequest = null;
+					if (connection === activeConnection) {
+						spaceStatus.textContent = label;
+						spaceStatus.hidden = !label;
+					}
+				}
+			}
+		}
+
+		// Refresh the affected listing and the volume's capacity after a write.
+		async function refreshAfterWrite(activeConnection, path) {
+			const refreshed = connection === activeConnection && currentPath === path && await loadDirectory(path);
+			void refreshSpace(activeConnection);
+			return refreshed;
+		}
+
+		// Fetch the original bytes with the API key before handing them to the browser.
+		async function readFileContents({ endpoint, accessKey }, path) {
+			const url = new URL(endpoint);
+			url.searchParams.set('path', path);
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), 8000);
+			try {
+				const response = await fetch(url, {
+					headers: accessKey ? { Authorization: 'Bearer ' + accessKey } : {},
+					credentials: 'omit',
+					redirect: 'error',
+					signal: controller.signal,
+				});
+				if (response.status === 403) {
+					throw new Error('Access denied. Check the file API key.');
+				}
+				if (!response.ok) {
+					throw new Error('File API returned HTTP ' + response.status + '.');
+				}
+				return await response.blob();
+			} finally {
+				clearTimeout(timeout);
+			}
+		}
+
+		// Give the browser a download URL that contains only the fetched bytes.
+		function saveDownload(contents, name) {
+			const url = URL.createObjectURL(contents);
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = name;
+			link.hidden = true;
+			document.body.append(link);
+			link.click();
+			link.remove();
+			setTimeout(() => URL.revokeObjectURL(url), 60000);
+		}
+
+		// Download the selected files without changing the current directory or selection.
+		function downloadSelectedFiles() {
+			if (!downloadButton.disabled) {
+				void downloadFiles(getSelectedEntries());
+			}
+		}
+
+		// Send each file to the browser separately so the ESP serves one request at a time.
+		async function downloadFiles(entries) {
+			if (!hasOnlyFiles(entries)) {
+				return;
+			}
+
+			const activeConnection = connection;
+			const prefix = currentPath ? currentPath + '/' : '';
+			const failures = [];
+			let sent = 0;
+			downloadPending = true;
+			updateFileControls();
+			connectionStatus.dataset.state = 'connecting';
+
+			try {
+				for (const entry of entries) {
+					if (connection === activeConnection) {
+						connectionStatus.textContent = 'Downloading ' + entry.name + '…';
+					}
+					try {
+						const contents = await readFileContents(activeConnection, prefix + entry.name);
+						saveDownload(contents, entry.name);
+						sent++;
+					} catch (error) {
+						failures.push(entry.name + ' (' + error.message + ')');
+					}
+				}
+				if (connection === activeConnection) {
+					const description = entries.length === 1 ? entries[0].name : sent + (sent === 1 ? ' file' : ' files');
+					const messages = [];
+					if (sent) {
+						messages.push('Sent ' + description + ' to the browser for download.');
+					}
+					if (failures.length) {
+						messages.push('Could not download ' + failures.join(', ') + '.');
+					}
+					connectionStatus.dataset.state = failures.length ? 'error' : 'connected';
+					connectionStatus.textContent = messages.join(' ');
+				}
+			} finally {
+				downloadPending = false;
+				updateFileControls();
+			}
+		}
+
+		// Send an authenticated write or cleanup request with the file API's timeout.
+		async function changeFile(url, accessKey, method, body, timeoutMs = 8000) {
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), timeoutMs);
+			try {
+				const response = await fetch(url, {
+					method,
+					body,
+					headers: accessKey ? { Authorization: 'Bearer ' + accessKey } : {},
+					credentials: 'omit',
+					redirect: 'error',
+					signal: controller.signal,
+				});
+				if (!response.ok) {
+					const message = [400, 409].includes(response.status) ? (await response.text()).trim() : '';
+					const error = new Error(message || 'HTTP ' + response.status);
+					error.status = response.status;
+					throw error;
+				}
+				return response.status;
+			} finally {
+				clearTimeout(timeout);
+			}
+		}
+
+		// Open the browser's multi-file picker from the toolbar gesture.
+		function chooseUploadFiles() {
+			uploadInput.click();
+		}
+
+		// Clear the picker after reading it so the same file can be selected again.
+		function handlePickedFiles() {
+			const files = Array.from(uploadInput.files);
+			uploadInput.value = '';
+			void uploadFiles(files);
+		}
+
+		// Open the browser's folder picker from the toolbar gesture.
+		function chooseUploadFolder() {
+			uploadFolderInput.click();
+		}
+
+		// Prefer a real directory tree when supplied, or use the picked files' relative paths.
+		function handlePickedFolders() {
+			const entries = Array.from(uploadFolderInput.webkitEntries ?? []).filter((entry) => entry.isDirectory);
+			const files = Array.from(uploadFolderInput.files);
+			uploadFolderInput.value = '';
+			if (entries.length) {
+				void uploadFiles([], entries);
+			} else if (files.length) {
+				void uploadFiles(files);
+			} else {
+				connectionStatus.dataset.state = 'error';
+				connectionStatus.textContent = 'The picker returned no files. Drop an empty folder onto the Files pane to upload it.';
+			}
+		}
+
+		// Identify local file drags without treating a dragged text selection or link as files.
+		function isFileDrag(event) {
+			return Array.from(event.dataTransfer?.types ?? []).includes('Files');
+		}
+
+		// Drag the selected group, or select the row that started an otherwise unselected drag.
+		function beginRowDrag(event) {
+			const row = event.target.closest('tr');
+			if (!row || !directoryLoaded || connectButton.disabled || renameEditor || event.target.closest('input')) {
+				event.preventDefault();
+				return;
+			}
+
+			const index = row.sectionRowIndex;
+			if (!selectedRows.has(index)) {
+				selectRow(index, false, false);
+			}
+			draggedMove = captureMove();
+			event.dataTransfer.effectAllowed = 'move';
+			event.dataTransfer.setData('application/x-mds-file-move', 'selection');
+		}
+
+		// Resolve a valid ancestor breadcrumb or folder row for the active internal drag.
+		function getMoveTarget(event, request) {
+			if (connection !== request.device || currentPath !== request.source || connectButton.disabled) {
+				return null;
+			}
+
+			const breadcrumb = event.target.closest('#folder-path button[data-path]');
+			if (breadcrumb) {
+				const destination = breadcrumb.dataset.path;
+				return canMoveTo(request, destination) ? { element: breadcrumb, destination } : null;
+			}
+
+			const row = event.target.closest('#file-list tbody tr');
+			const item = row && visibleEntries[row.sectionRowIndex];
+			if (item?.type !== 'directory') {
+				return null;
+			}
+
+			const destination = childPath(request.source, item.name);
+			return canMoveTo(request, destination) ? { element: row, destination } : null;
+		}
+
+		// Move the highlight as the drag crosses valid breadcrumb and row targets.
+		function showMoveTarget(element) {
+			if (moveTargetElement !== element) {
+				moveTargetElement?.classList.remove('is-move-target');
+				moveTargetElement = element;
+				moveTargetElement?.classList.add('is-move-target');
+			}
+		}
+
+		// Clear local drag state after dropping, canceling, or replacing the file list.
+		function endRowDrag() {
+			draggedMove = null;
+			showMoveTarget(null);
+		}
+
+		// Keep a file drag inside the app and highlight the receiving pane when it is ready.
+		function showUploadTarget(event) {
+			if (draggedMove) {
+				event.preventDefault();
+				const target = getMoveTarget(event, draggedMove);
+				event.dataTransfer.dropEffect = target ? 'move' : 'none';
+				showMoveTarget(target?.element ?? null);
+				return;
+			}
+			if (!isFileDrag(event)) {
+				return;
+			}
+
+			event.preventDefault();
+			event.dataTransfer.dropEffect = uploadButton.disabled ? 'none' : 'copy';
+			filePane.classList.toggle('is-drop-target', !uploadButton.disabled);
+		}
+
+		// Leave the highlight in place while dragging between children of the pane.
+		function leaveUploadTarget(event) {
+			if (!filePane.contains(event.relatedTarget)) {
+				filePane.classList.remove('is-drop-target');
+				showMoveTarget(null);
+			}
+		}
+
+		// Capture dropped files and directory handles before the browser clears the drag data.
+		function handleDroppedFiles(event) {
+			if (draggedMove) {
+				event.preventDefault();
+				const request = draggedMove;
+				const target = getMoveTarget(event, request);
+				endRowDrag();
+				if (target) {
+					void moveSelectedItems(request, target.destination);
+				}
+				return;
+			}
+			if (!isFileDrag(event)) {
+				return;
+			}
+
+			event.preventDefault();
+			filePane.classList.remove('is-drop-target');
+			if (uploadButton.disabled) {
+				return;
+			}
+
+			const items = Array.from(event.dataTransfer.items ?? []).filter((item) => item.kind === 'file');
+			if (!items.length) {
+				void uploadFiles(Array.from(event.dataTransfer.files));
+				return;
+			}
+
+			const files = [];
+			const folders = [];
+			for (const item of items) {
+				const entry = item.webkitGetAsEntry?.();
+				if (entry?.isDirectory) {
+					folders.push(entry);
+					continue;
+				}
+				const file = item.getAsFile();
+				if (file) {
+					files.push(file);
+				}
+			}
+			void uploadFiles(files, folders);
+		}
+
+		// Walk a dropped entry, reading every batch and retaining empty directories explicitly.
+		async function collectUploadEntries(entry, parent, plan, failures) {
+			const path = childPath(parent, entry.name);
+			if (!entry.name || entry.name.includes('/')) {
+				failures.push(path + ' (invalid name)');
+				return;
+			}
+
+			try {
+				if (entry.isFile) {
+					const file = await new Promise((resolve, reject) => {
+						// Read the file while preserving its relative path from the dropped tree.
+						entry.file(resolve, reject);
+					});
+					plan.push({ path, file });
+					return;
+				}
+				if (!entry.isDirectory) {
+					return;
+				}
+
+				const reader = entry.createReader();
+				let empty = true;
+				for (;;) {
+					const children = await new Promise((resolve, reject) => {
+						// The browser can return a directory in several batches.
+						reader.readEntries(resolve, reject);
+					});
+					if (!children.length) {
+						if (empty) {
+							plan.push({ path });
+						}
+						return;
+					}
+					empty = false;
+					for (const child of children) {
+						await collectUploadEntries(child, path, plan, failures);
+					}
+				}
+			} catch (error) {
+				failures.push(path + ' (' + error.message + ')');
+			}
+		}
+
+		// Create a directory with the native route, also used for empty uploaded folders.
+		async function makeDirectory({ endpoint, accessKey }, path) {
+			const url = new URL(endpoint);
+			url.searchParams.set('dir', path);
+			const status = await changeFile(url, accessKey, 'PUT');
+			if (status !== 200 && status !== 201) {
+				throw new Error('Unexpected response from the create-folder API.');
+			}
+			return status;
+		}
+
+		// Send one file to the ESP using the same multipart format for files and folder trees.
+		function sendUploadFile({ endpoint, accessKey }, path, file) {
+			const url = new URL(endpoint);
+			url.searchParams.set('path', path);
+			const body = new FormData();
+			body.append('file', file);
+			return changeFile(url, accessKey, 'POST', body, 120000);
+		}
+
+		// Upload one file or directory operation at a time beneath the chosen ESP folder.
+		async function uploadFiles(files, folders = []) {
+			if (uploadButton.disabled || (!files.length && !folders.length)) {
+				return;
+			}
+
+			const activeConnection = connection;
+			const path = currentPath;
+			const failures = [];
+			let uploaded = 0;
+			let replaced = 0;
+			let directoriesReady = 0;
+			let directoriesCreated = 0;
+			fileChangePending = true;
+			updateFileControls();
+			try {
+				const plan = [];
+				for (const file of files) {
+					if (!file.name || file.name.includes('/')) {
+						failures.push(file.name + ' (invalid filename)');
+						continue;
+					}
+					plan.push({ path: file.webkitRelativePath || file.name, file });
+				}
+				if (folders.length) {
+					connectionStatus.dataset.state = 'connecting';
+					connectionStatus.textContent = 'Reading folders…';
+					for (const folder of folders) {
+						await collectUploadEntries(folder, '', plan, failures);
+					}
+				}
+
+				for (const entry of plan) {
+					if (connection === activeConnection) {
+						connectionStatus.dataset.state = 'connecting';
+						connectionStatus.textContent = (entry.file ? 'Uploading ' : 'Creating ') + entry.path + '…';
+					}
+
+					const destination = childPath(path, entry.path);
+					try {
+						if (entry.file) {
+							const result = await sendUploadFile(activeConnection, destination, entry.file);
+							uploaded++;
+							replaced += result === 200 ? 1 : 0;
+						} else {
+							const result = await makeDirectory(activeConnection, destination);
+							directoriesReady++;
+							directoriesCreated += result === 201 ? 1 : 0;
+						}
+					} catch (error) {
+						failures.push(entry.path + ' (' + error.message + ')');
+					}
+				}
+			} finally {
+				fileChangePending = false;
+				updateFileControls();
+			}
+
+			const refreshed = !(uploaded || directoriesCreated) || await refreshAfterWrite(activeConnection, path);
+			if (connection !== activeConnection || currentPath !== path) {
+				return;
+			}
+
+			const messages = [];
+			if (uploaded) {
+				const replacement = replaced ? ' (' + replaced + ' replaced)' : '';
+				messages.push('Uploaded ' + uploaded + (uploaded === 1 ? ' file' : ' files') + replacement + '.');
+			}
+			if (directoriesReady) {
+				const description = directoriesReady === 1 ? 'empty folder' : 'empty folders';
+				messages.push('Prepared ' + directoriesReady + ' ' + description + ' (' + directoriesCreated + ' created).');
+			}
+			if (failures.length) {
+				messages.push('Could not upload ' + failures.join(', ') + '.');
+			}
+			if (!refreshed) {
+				messages.push(connectionStatus.textContent);
+			}
+			connectionStatus.dataset.state = failures.length || !refreshed ? 'error' : 'connected';
+			connectionStatus.textContent = messages.join(' ');
+		}
+
+		// Pick the first unused Finder-style name from the listing and recent collisions.
+		function nextFolderName(names) {
+			let name = 'untitled';
+			for (let suffix = 2; names.has(name); suffix++) {
+				name = 'untitled ' + suffix;
+			}
+			return name;
+		}
+
+		// Create a new numbered folder using PUT and retry if a folder appeared in another tab.
+		async function createFolder() {
+			if (newFolderButton.disabled) {
+				return;
+			}
+
+			const activeConnection = connection;
+			const parentPath = currentPath;
+			const names = new Set(visibleEntries.map((entry) => entry.name));
+
+			fileChangePending = true;
+			updateFileControls();
+			connectionStatus.dataset.state = 'connecting';
+
+			let name = '';
+			let created = false;
+			let issue = '';
+			try {
+				for (let attempt = 0; attempt < 8; attempt++) {
+					name = nextFolderName(names);
+					connectionStatus.textContent = 'Creating ' + name + '…';
+					const status = await makeDirectory(activeConnection, childPath(parentPath, name));
+					if (status === 201) {
+						created = true;
+						break;
+					}
+					names.add(name);
+				}
+				if (!created) {
+					issue = 'Could not find an unused folder name. Reload the folder and try again.';
+				}
+			} catch (error) {
+				issue = 'Could not create ' + name + '. ' + error.message;
+			} finally {
+				fileChangePending = false;
+				updateFileControls();
+			}
+
+			if (created) {
+				await refreshAfterWrite(activeConnection, parentPath);
+			}
+			if (connection === activeConnection && currentPath === parentPath && issue) {
+				connectionStatus.dataset.state = 'error';
+				connectionStatus.textContent = issue;
+			}
+		}
+
+		// Edit exactly one selected name in place, selecting the filename stem for files.
+		function beginRename() {
+			if (renameButton.disabled) {
+				return;
+			}
+
+			const [index] = selectedRows;
+			const row = fileRows.rows[index];
+			const item = visibleEntries[index];
+			const label = row.querySelector('.file-name span');
+			const input = document.createElement('input');
+			input.type = 'text';
+			input.value = item.name;
+			input.autocomplete = 'off';
+			input.spellcheck = false;
+			input.setAttribute('aria-label', 'Rename ' + item.name);
+			input.setAttribute('aria-describedby', 'status');
+			input.addEventListener('keydown', useRenameKeys);
+			input.addEventListener('blur', cancelRenameOnBlur);
+
+			renameEditor = { row, item, label, input };
+			label.replaceWith(input);
+			updateFileControls();
+			input.focus();
+			const extension = item.type === 'file' ? item.name.lastIndexOf('.') : -1;
+			input.setSelectionRange(0, extension > 0 ? extension : item.name.length);
+		}
+
+		// Let the input handle its own cursor keys and reserve Return and Escape for editing.
+		function useRenameKeys(event) {
+			event.stopPropagation();
+			if (event.isComposing) {
+				return;
+			}
+			if (event.key === 'Enter') {
+				event.preventDefault();
+				void submitRename();
+			} else if (event.key === 'Escape' && !fileChangePending) {
+				event.preventDefault();
+				endRename(true);
+			}
+		}
+
+		// Leaving an editor with an unsaved name restores the original label.
+		function cancelRenameOnBlur(event) {
+			if (!fileChangePending && renameEditor?.input === event.target) {
+				endRename();
+			}
+		}
+
+		// Remove the editor and optionally put keyboard focus back on its row.
+		function endRename(restoreFocus = false) {
+			if (!renameEditor) {
+				return;
+			}
+
+			const { row, label, input } = renameEditor;
+			renameEditor = null;
+			input.replaceWith(label);
+			updateFileControls();
+			if (restoreFocus) {
+				row.focus();
+			}
+		}
+
+		// Save the edited name using the filesystem's native rename route.
+		async function submitRename() {
+			if (!renameEditor || fileChangePending) {
+				return;
+			}
+
+			const editor = renameEditor;
+			const name = editor.input.value;
+			if (name === editor.item.name) {
+				endRename(true);
+				return;
+			}
+
+			const activeConnection = connection;
+			const parentPath = currentPath;
+			const source = parentPath ? parentPath + '/' + editor.item.name : editor.item.name;
+			const url = new URL(activeConnection.endpoint);
+			url.searchParams.set('path', source);
+			url.searchParams.set('name', name);
+
+			fileChangePending = true;
+			editor.input.readOnly = true;
+			updateFileControls();
+			connectionStatus.dataset.state = 'connecting';
+			connectionStatus.textContent = 'Renaming…';
+
+			try {
+				await changeFile(url, activeConnection.accessKey, 'PATCH');
+			} catch (error) {
+				if (renameEditor === editor) {
+					editor.input.readOnly = false;
+					editor.input.setAttribute('aria-invalid', 'true');
+					connectionStatus.dataset.state = 'error';
+					connectionStatus.textContent = 'Could not rename. ' + error.message;
+					editor.input.focus();
+				}
+				return;
+			} finally {
+				fileChangePending = false;
+				updateFileControls();
+			}
+
+			if (renameEditor === editor) {
+				endRename();
+				if (await loadDirectory(parentPath) && connection === activeConnection) {
+					const index = visibleEntries.findIndex((entry) => entry.name === name);
+					if (index >= 0) {
+						selectRow(index, false, false);
+						focusRow(index);
+					}
+				}
+			}
+		}
+
+		// Confirm the exact selection before sending any DELETE requests.
+		function confirmDeletion() {
+			if (deleteButton.disabled || deleteDialog.open) {
+				return;
+			}
+
+			const names = getSelectedEntries().map((entry) => entry.name);
+			pendingDeletion = { device: connection, path: currentPath, names };
+			deleteHeading.textContent = names.length === 1 ? 'Delete this item?' : 'Delete ' + names.length + ' items?';
+			deleteNames.replaceChildren();
+			for (const name of names) {
+				const item = document.createElement('li');
+				item.textContent = name;
+				deleteNames.append(item);
+			}
+
+			deleteDialog.returnValue = '';
+			deleteDialog.showModal();
+		}
+
+		// Ignore a canceled dialog or a confirmation from a directory the user left.
+		function finishDeleteConfirmation() {
+			const request = pendingDeletion;
+			pendingDeletion = null;
+			if (deleteDialog.returnValue === 'delete' && request
+				&& connection === request.device && currentPath === request.path && !deleteButton.disabled) {
+				void deleteSelectedItems(request);
+			}
+		}
+
+		// Delete each confirmed item in turn and keep the failures selected after refreshing.
+		async function deleteSelectedItems({ device: activeConnection, path, names }) {
+			fileChangePending = true;
+			updateFileControls();
+			connectionStatus.dataset.state = 'connecting';
+			connectionStatus.textContent = 'Deleting selected items…';
+
+			const failures = new Map();
+			try {
+				for (const name of names) {
+					const url = new URL(activeConnection.endpoint);
+					url.searchParams.set('path', path ? path + '/' + name : name);
+					try {
+						await changeFile(url, activeConnection.accessKey, 'DELETE');
+					} catch (error) {
+						failures.set(name, error);
+					}
+				}
+			} finally {
+				fileChangePending = false;
+				updateFileControls();
+			}
+
+			const deleted = names.length - failures.size;
+			if (connection !== activeConnection || currentPath !== path) {
+				if (deleted) {
+					void refreshSpace(activeConnection);
+				}
+				return;
+			}
+			const refreshed = deleted ? await refreshAfterWrite(activeConnection, path) : await loadDirectory(path);
+			if (connection !== activeConnection || currentPath !== path) {
+				return;
+			}
+			if (refreshed) {
+				for (const [index, entry] of visibleEntries.entries()) {
+					if (failures.has(entry.name)) {
+						selectedRows.add(index);
+					}
+				}
+				showSelection();
+			}
+
+			let result = 'Deleted ' + deleted + (deleted === 1 ? ' item.' : ' items.');
+			for (const [name, error] of failures) {
+				const outcome = error.status === 409 ? ' Kept ' : ' Could not confirm deletion of ';
+				result += outcome + name + ' (' + error.message + ').';
+			}
+			if (!refreshed) {
+				result += ' ' + connectionStatus.textContent;
+			}
+			connectionStatus.dataset.state = failures.size || !refreshed ? 'error' : 'connected';
+			connectionStatus.textContent = result;
+		}
+
+		// Open a destination picker at the device's root.
+		function openMovePicker() {
+			if (moveButton.disabled || moveDialog.open) {
+				return;
+			}
+
+			pendingMove = captureMove();
+			const count = pendingMove.items.length;
+			moveHeading.textContent = 'Move ' + count + (count === 1 ? ' selected item to' : ' selected items to');
+			moveDialog.returnValue = '';
+			moveDialog.showModal();
+			void loadMoveFolder('');
+		}
+
+		// List one level of folders and offer the current picker path as a destination.
+		async function loadMoveFolder(path) {
+			const request = pendingMove;
+			request.destination = path;
+			movePickerRequest?.abort();
+			const controller = new AbortController();
+			movePickerRequest = controller;
+			const timeout = setTimeout(() => controller.abort(), 8000);
+			if (moveFolders.contains(document.activeElement) || movePath.contains(document.activeElement)) {
+				moveHeading.focus();
+			}
+			renderFolderBreadcrumbs(movePath, path, true);
+			moveSubmit.disabled = true;
+			moveFolders.replaceChildren();
+			moveStatus.textContent = 'Loading folders…';
+
+			try {
+				const entries = await readDirectoryEntries(request.device, path, controller.signal);
+				if (!moveDialog.open || movePickerRequest !== controller) {
+					return;
+				}
+				for (const entry of entries) {
+					const destination = childPath(path, entry.name);
+					if (entry.type !== 'directory') {
+						continue;
+					}
+
+					const button = document.createElement('button');
+					button.type = 'button';
+					button.textContent = entry.name;
+					button.dataset.path = destination;
+					button.disabled = request.items.some((item) => item.type === 'directory'
+						&& destination === childPath(request.source, item.name));
+					moveFolders.append(button);
+				}
+				moveSubmit.disabled = !canMoveTo(request, path);
+				moveStatus.textContent = moveFolders.childElementCount ? '' : 'No subfolders.';
+			} catch (error) {
+				if (moveDialog.open && movePickerRequest === controller) {
+					moveStatus.textContent = 'Could not list folders. ' + error.message;
+				}
+			} finally {
+				clearTimeout(timeout);
+				if (movePickerRequest === controller) {
+					movePickerRequest = null;
+				}
+			}
+		}
+
+		// Browse into a folder in the picker without changing the main file pane.
+		function openMoveDestination(event) {
+			const button = event.target.closest('button[data-path]');
+			if (button && !button.disabled && pendingMove) {
+				void loadMoveFolder(button.dataset.path);
+			}
+		}
+
+		// Cancel outstanding picker reads and move only after Move Here was chosen.
+		function closeMovePicker() {
+			const request = pendingMove;
+			pendingMove = null;
+			movePickerRequest?.abort();
+			if (moveDialog.returnValue === 'move' && request && !moveSubmit.disabled) {
+				void moveSelectedItems(request, request.destination);
+			}
+		}
+
+		// Move one entry at a time, preserving and reporting any item the device cannot move.
+		async function moveSelectedItems(request, destination) {
+			const { device: activeConnection, source, items } = request;
+			if (connection !== activeConnection || currentPath !== source
+				|| connectButton.disabled || !canMoveTo(request, destination)) {
+				return;
+			}
+
+			const failures = new Map();
+			fileChangePending = true;
+			updateFileControls();
+			connectionStatus.dataset.state = 'connecting';
+			connectionStatus.textContent = 'Moving selected items…';
+			try {
+				for (const item of items) {
+					const url = new URL(activeConnection.endpoint);
+					url.searchParams.set('path', childPath(source, item.name));
+					url.searchParams.set('to', childPath(destination, item.name));
+					try {
+						await changeFile(url, activeConnection.accessKey, 'PATCH');
+					} catch (error) {
+						failures.set(item.name, error.message);
+					}
+				}
+			} finally {
+				fileChangePending = false;
+				updateFileControls();
+			}
+
+			const moved = items.length - failures.size;
+			const refreshed = !moved || await refreshAfterWrite(activeConnection, source);
+			if (connection !== activeConnection || currentPath !== source) {
+				return;
+			}
+			if (moved && refreshed && failures.size) {
+				for (const [index, entry] of visibleEntries.entries()) {
+					if (failures.has(entry.name)) {
+						selectedRows.add(index);
+					}
+				}
+				showSelection();
+			}
+
+			let result = 'Moved ' + moved + (moved === 1 ? ' item.' : ' items.');
+			for (const [name, reason] of failures) {
+				result += ' Could not move ' + name + ' (' + reason + ').';
+			}
+			if (!refreshed) {
+				result += ' ' + connectionStatus.textContent;
+			}
+			connectionStatus.dataset.state = failures.size || !refreshed ? 'error' : 'connected';
+			connectionStatus.textContent = result;
+		}
+
+		// Read and validate the directory response for the file pane or destination picker.
+		async function readDirectoryEntries({ endpoint, accessKey }, path, signal) {
+			const headers = accessKey ? { Authorization: 'Bearer ' + accessKey } : {};
+			const url = new URL(endpoint);
+			if (path) {
+				url.searchParams.set('dir', path);
+			}
+			const response = await fetch(url, { headers, credentials: 'omit', redirect: 'error', signal });
+			if (response.status === 403) {
+				throw new Error('Access denied. Check the file API key.');
+			}
+			if (!response.ok) {
+				throw new Error('File API returned HTTP ' + response.status + '.');
+			}
+
+			const entries = await response.json();
+			if (!Array.isArray(entries) || !entries.every(isFileEntry)) {
+				throw new Error('The device returned an invalid file list.');
+			}
+			return entries;
+		}
+
+		// Read a directory from the FS API and keep the current view available on navigation errors.
+		async function loadDirectory(path, { connecting = false, updateUrl = false } = {}) {
+			const activeConnection = connection;
+			const { endpoint } = activeConnection;
+			const moveFocus = !connecting
+				&& (fileRows.contains(document.activeElement) || folderPath.contains(document.activeElement));
+			if (!directoryLoaded) {
+				if (updateUrl && !updateFolderUrl(path)) {
+					return false;
+				}
+				showFolderPath(path);
+			}
+
+			directoryRequest?.abort();
+			const controller = new AbortController();
+			directoryRequest = controller;
+			const timeout = setTimeout(() => controller.abort(), 8000);
+			updateFileControls();
+			connectionStatus.dataset.state = 'connecting';
+			connectionStatus.textContent = connecting ? 'Connecting to ' + endpoint.host + '…' : 'Opening folder…';
+
+			try {
+				const entries = await readDirectoryEntries(activeConnection, path, controller.signal);
+				if (directoryRequest !== controller) {
+					return false;
+				}
+				if (updateUrl && directoryLoaded && !updateFolderUrl(path)) {
+					return false;
+				}
+
+				showFiles(entries);
+				directoryLoaded = true;
+				showFolderPath(path);
+				if (moveFocus) {
+					filesHeading.focus();
+				}
+				connectionStatus.dataset.state = 'connected';
+				connectionStatus.textContent = 'Connected to ' + endpoint.host;
+				return true;
+			} catch (error) {
+				if (directoryRequest !== controller) {
+					return false;
+				}
+				if (connecting) {
+					fileMessage.textContent = 'Unable to list files.';
+				}
+				connectionStatus.dataset.state = 'error';
+				if (controller.signal.aborted) {
+					connectionStatus.textContent = 'Connection to ' + endpoint.host + ' timed out.';
+				} else if (error instanceof SyntaxError) {
+					connectionStatus.textContent = 'The device returned an invalid file list.';
+				} else if (error instanceof TypeError) {
+					connectionStatus.textContent = 'Could not reach the file API at ' + endpoint.host + '.';
+				} else {
+					connectionStatus.textContent = error.message;
+				}
+				return false;
+			} finally {
+				clearTimeout(timeout);
+				if (directoryRequest === controller) {
+					directoryRequest = null;
+					updateFileControls();
+				}
+			}
+		}
+
+		// Validate the directory and file records expected from MDS_HTTP_FS.
+		function isFileEntry(entry) {
+			return entry && typeof entry.name === 'string'
+				&& (entry.type === 'directory'
+					|| (entry.type === 'file' && Number.isSafeInteger(entry.size) && entry.size >= 0));
+		}
+
+		form.addEventListener('submit', connect);
+		device.addEventListener('input', showSavedKey);
+		folderPath.addEventListener('click', openBreadcrumb);
+		newFolderButton.addEventListener('click', createFolder);
+		uploadButton.addEventListener('click', chooseUploadFiles);
+		uploadInput.addEventListener('change', handlePickedFiles);
+		uploadFolderButton.addEventListener('click', chooseUploadFolder);
+		uploadFolderInput.addEventListener('change', handlePickedFolders);
+		downloadButton.addEventListener('click', downloadSelectedFiles);
+		renameButton.addEventListener('click', beginRename);
+		moveButton.addEventListener('click', openMovePicker);
+		moveFolders.addEventListener('click', openMoveDestination);
+		movePath.addEventListener('click', openMoveDestination);
+		moveDialog.addEventListener('close', closeMovePicker);
+		deleteButton.addEventListener('click', confirmDeletion);
+		deleteDialog.addEventListener('close', finishDeleteConfirmation);
+		fileList.addEventListener('fileactivate', activateItem);
+		fileRows.addEventListener('click', clickFile);
+		fileRows.addEventListener('dblclick', doubleClickFile);
+		fileRows.addEventListener('keydown', useFileKeys);
+		fileRows.addEventListener('dragstart', beginRowDrag);
+		fileRows.addEventListener('dragend', endRowDrag);
+		filePane.addEventListener('click', clickFilePane);
+		filePane.addEventListener('dragenter', showUploadTarget);
+		filePane.addEventListener('dragover', showUploadTarget);
+		filePane.addEventListener('dragleave', leaveUploadTarget);
+		filePane.addEventListener('drop', handleDroppedFiles);
+		window.addEventListener('popstate', restoreFolderFromUrl);
+		window.addEventListener('storage', syncSavedKey);
+
+		device.value = initialDeviceAddress();
+		showSavedKey();
+		if (device.value) {
+			void startConnection(fileEndpoint(device.value), key.value);
+		}
+	</script>
+</body>
+</html>
